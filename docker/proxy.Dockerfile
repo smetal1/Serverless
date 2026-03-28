@@ -29,16 +29,24 @@ RUN groupadd -g 1000 podstack \
 RUN pip install --no-cache-dir 'litellm[proxy]' prisma
 
 # Generate Prisma client and fetch query engine binary
+# Prisma runtime looks in /root/.cache even when running as non-root
 RUN prisma generate --schema=/usr/local/lib/python3.11/site-packages/litellm/proxy/schema.prisma \
     && prisma py fetch \
-    && mkdir -p /home/podstack/.cache \
-    && cp -r /root/.cache/prisma-python /home/podstack/.cache/prisma-python \
-    && chown -R podstack:podstack /home/podstack/.cache/prisma-python \
-    && ENGINES_DIR=$(find /home/podstack/.cache/prisma-python -path '*/@prisma/engines' -type d) \
+    && chmod -R a+rx /root/.cache/prisma-python \
+    && chmod a+x /root \
+    && ENGINES_DIR=$(find /root/.cache/prisma-python -path '*/@prisma/engines' -type d) \
     && for f in "$ENGINES_DIR"/*-debian-openssl-3.0.x*; do \
          newname=$(echo "$f" | sed 's/3\.0\.x/3.5.x/g'); \
          ln -sf "$f" "$newname"; \
        done \
+    && PRISMA_DIR=$(find /root/.cache/prisma-python -path '*/node_modules/prisma' -type d 2>/dev/null || true) \
+    && if [ -z "$PRISMA_DIR" ]; then \
+         PRISMA_DIR=$(dirname $(find /root/.cache/prisma-python -name 'query-engine-*' -not -name '*.node' | head -1))/../../prisma; \
+         mkdir -p "$PRISMA_DIR"; \
+         for f in $(find /root/.cache/prisma-python -name 'query-engine-*' -o -name 'schema-engine-*' -o -name 'libquery_engine-*'); do \
+           ln -sf "$f" "$PRISMA_DIR/$(basename $f)"; \
+         done; \
+       fi \
     && python -c "import prisma; print('Prisma client OK')"
 
 # Copy and install podstack-proxy from local source
