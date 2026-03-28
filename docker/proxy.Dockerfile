@@ -5,48 +5,50 @@
 # and spend tracking via LiteLLM.
 # =============================================================================
 
-FROM --platform=linux/amd64 python:3.11-alpine
+FROM python:3.11-slim
 
 LABEL maintainer="Podstack <engineering@podstack.io>"
 LABEL org.opencontainers.image.title="podstack-proxy"
 LABEL org.opencontainers.image.description="LiteLLM proxy for unified model access in Podstack Inference OS"
 LABEL org.opencontainers.image.vendor="Podstack"
 
-# Install system dependencies needed for building Python packages
-RUN apk add --no-cache \
+# Install system dependencies (libatomic1 + nodejs needed for prisma generate)
+RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
-        gcc \
-        musl-dev \
-        libffi-dev \
-        openssl-dev
+        libatomic1 \
+        nodejs \
+        npm \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN addgroup -g 1000 -S podstack \
-    && adduser -u 1000 -S podstack -G podstack -h /home/podstack -s /bin/sh
+RUN groupadd -g 1000 podstack \
+    && useradd -u 1000 -g podstack -m -s /bin/sh podstack
 
-# Install LiteLLM and dependencies (without [proxy] extra to avoid pyroscope-io Rust build issue)
-RUN pip install --no-cache-dir \
-        litellm \
-        gunicorn \
-        uvicorn \
-        uvloop \
-        fastapi \
-        orjson \
-        prometheus-client \
-        httpx \
-        pydantic
+# Install LiteLLM with proxy extras + Prisma for PostgreSQL
+RUN pip install --no-cache-dir 'litellm[proxy]' prisma
+
+# Generate Prisma client and fetch query engine binary
+RUN prisma generate --schema=/usr/local/lib/python3.11/site-packages/litellm/proxy/schema.prisma \
+    && prisma py fetch \
+    && mkdir -p /home/podstack/.cache \
+    && cp -r /root/.cache/prisma-python /home/podstack/.cache/prisma-python \
+    && chown -R podstack:podstack /home/podstack/.cache/prisma-python \
+    && ENGINES_DIR=$(find /home/podstack/.cache/prisma-python -path '*/@prisma/engines' -type d) \
+    && for f in "$ENGINES_DIR"/*-debian-openssl-3.0.x*; do \
+         newname=$(echo "$f" | sed 's/3\.0\.x/3.5.x/g'); \
+         ln -sf "$f" "$newname"; \
+       done \
+    && python -c "import prisma; print('Prisma client OK')"
 
 # Copy and install podstack-proxy from local source
 COPY python/podstack-proxy/ /tmp/podstack-proxy/
 RUN pip install --no-cache-dir /tmp/podstack-proxy/ && rm -rf /tmp/podstack-proxy/
 
-# Remove build dependencies to keep image small
-RUN apk del gcc musl-dev libffi-dev openssl-dev
-
 # Create directories
 RUN mkdir -p /etc/podstack /var/log/podstack \
-    && chown -R podstack:podstack /etc/podstack /var/log/podstack
+    && chown -R podstack:podstack /etc/podstack /var/log/podstack \
+    && chmod -R a+w /usr/local/lib/python3.11/site-packages/litellm/proxy/_experimental/out 2>/dev/null || true
 
 # LiteLLM proxy port
 EXPOSE 4000

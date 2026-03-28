@@ -34,7 +34,7 @@ rules:
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [""]
     resources: [namespaces]
-    verbs: [get, list, create]
+    verbs: [get, list, watch, create]
   - apiGroups: ["podstack.io"]
     resources: [modeldeployments, snapshots, loraadapters, tenants]
     verbs: [get, list, watch, create, update, patch, delete]
@@ -73,7 +73,158 @@ subjects:
     name: podstack-operator
     namespace: serverless
 ---
-# Operator Deployment
+# =============================================================================
+# STORAGE: NFS PV/PVC for CUDA Snapshots (TrueNAS)
+# =============================================================================
+# Prereq: Create dataset on TrueNAS at /mnt/tank/podstack/serverless-snapshots
+#         with NFS share enabled (maproot=root, RW access)
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: podstack-serverless-snapshots
+  labels:
+    app.kubernetes.io/name: podstack
+    app.kubernetes.io/part-of: podstack-inference-os
+    podstack.io/storage-type: nfs-snapshots
+spec:
+  capacity:
+    storage: 1Ti
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions:
+    - nfsvers=4.1
+    - hard
+    - nointr
+  nfs:
+    path: /mnt/tank/podstack/serverless-snapshots
+    server: 192.168.29.5
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: podstack-snapshots
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack
+    app.kubernetes.io/part-of: podstack-inference-os
+    podstack.io/storage-type: nfs-snapshots
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: podstack-serverless-snapshots
+  resources:
+    requests:
+      storage: 1Ti
+---
+# =============================================================================
+# STORAGE: PostgreSQL with Longhorn for LiteLLM Model Hub
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: podstack-postgres-secret
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-postgres
+    app.kubernetes.io/part-of: podstack-inference-os
+type: Opaque
+stringData:
+  POSTGRES_USER: litellm
+  POSTGRES_PASSWORD: podstack-litellm-2026
+  POSTGRES_DB: litellm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: podstack-postgres
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-postgres
+    app.kubernetes.io/part-of: podstack-inference-os
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: podstack-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: podstack-postgres
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-postgres
+    app.kubernetes.io/part-of: podstack-inference-os
+spec:
+  serviceName: podstack-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: podstack-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: podstack-postgres
+        app.kubernetes.io/part-of: podstack-inference-os
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: podstack-postgres-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "litellm"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "litellm"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      nodeSelector:
+        kubernetes.io/os: linux
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: longhorn
+        resources:
+          requests:
+            storage: 10Gi
+---
+# =============================================================================
+# Operator Deployment (with snapshot PVC mounted)
+# =============================================================================
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -102,15 +253,14 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: operator
-          image: saurav7055/podstack-operator:dev
+          image: saurav7055/operator:latest
           imagePullPolicy: Always
           args:
             - --leader-elect=true
             - --metrics-bind-address=:8081
             - --health-probe-bind-address=:8082
-            - --namespace=serverless
-            - --nfs-base-path=/tmp/podstack/models
-            - --snapshot-base-path=/tmp/podstack/snapshots
+            - --nfs-base-path=/models
+            - --snapshot-base-path=/snapshots
           ports:
             - name: metrics
               containerPort: 8081
@@ -150,6 +300,13 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+          volumeMounts:
+            - name: snapshots
+              mountPath: /snapshots
+      volumes:
+        - name: snapshots
+          persistentVolumeClaim:
+            claimName: podstack-snapshots
       nodeSelector:
         kubernetes.io/os: linux
 ---
@@ -205,7 +362,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: gateway
-          image: saurav7055/podstack-gateway:dev
+          image: saurav7055/gateway:latest
           imagePullPolicy: Always
           args:
             - --addr=:8080
@@ -279,3 +436,177 @@ spec:
       port: 80
       targetPort: 8080
       protocol: TCP
+---
+# Proxy ConfigMap (with PostgreSQL database_url)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: podstack-proxy-config
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-proxy
+    app.kubernetes.io/part-of: podstack-inference-os
+data:
+  litellm-config.yaml: |
+    general_settings:
+      master_key: "sk-podstack-master-key"
+      database_url: "postgresql://litellm:podstack-litellm-2026@podstack-postgres.serverless.svc:5432/litellm"
+      max_parallel_requests: 1000
+      global_max_parallel_requests: 5000
+      infer_model_from_keys: true
+
+    litellm_settings:
+      drop_params: true
+      set_verbose: false
+      num_retries: 2
+      request_timeout: 300
+      telemetry: false
+      cache: true
+      cache_params:
+        type: local
+        ttl: 600
+
+    model_list:
+      - model_name: "health-check"
+        litellm_params:
+          model: "openai/health-check"
+          api_base: "http://localhost:4000"
+          api_key: "sk-podstack-health"
+
+    router_settings:
+      routing_strategy: "usage-based-routing-v2"
+      num_retries: 2
+      timeout: 300
+      retry_after: 5
+      allowed_fails: 3
+      cooldown_time: 60
+
+    environment_variables:
+      OPENAI_API_KEY: "sk-podstack-unused"
+---
+# Proxy Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podstack-proxy
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-proxy
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: podstack-proxy
+      app.kubernetes.io/component: proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: podstack-proxy
+        app.kubernetes.io/part-of: podstack-inference-os
+        app.kubernetes.io/component: proxy
+    spec:
+      serviceAccountName: podstack-operator
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: proxy
+          image: saurav7055/proxy:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 4000
+              protocol: TCP
+          env:
+            - name: LITELLM_CONFIG_PATH
+              value: /etc/podstack/litellm-config.yaml
+            - name: LITELLM_LOG_LEVEL
+              value: INFO
+            - name: DATABASE_URL
+              value: "postgresql://litellm:podstack-litellm-2026@podstack-postgres.serverless.svc:5432/litellm"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          startupProbe:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 18
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: proxy-config
+              mountPath: /etc/podstack
+              readOnly: true
+      volumes:
+        - name: proxy-config
+          configMap:
+            name: podstack-proxy-config
+      nodeSelector:
+        kubernetes.io/os: linux
+---
+# Proxy Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: podstack-proxy
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-proxy
+    app.kubernetes.io/part-of: podstack-inference-os
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: podstack-proxy
+    app.kubernetes.io/component: proxy
+  ports:
+    - name: http
+      port: 4000
+      targetPort: 4000
+      protocol: TCP
+---
+# Proxy IngressRoute (Traefik)
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: podstack-admin-endpoint
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-proxy
+    app.kubernetes.io/part-of: podstack-inference-os
+spec:
+  entryPoints:
+    - web
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`admin-endpoint.cloud.podstack.ai`)
+      services:
+        - name: podstack-proxy
+          port: 4000
+  tls:
+    secretName: wildcard-cloud-podstack-tls
