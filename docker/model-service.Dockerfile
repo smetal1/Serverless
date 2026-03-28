@@ -30,6 +30,8 @@ RUN mkdir -p /models && chown podstack:podstack /models
 ENV PYTHONUNBUFFERED=1
 ENV NFS_BASE_PATH=/models
 ENV PORT=8000
+ENV HF_HUB_DISABLE_XET=1
+ENV HF_HUB_ENABLE_HF_TRANSFER=0
 
 EXPOSE 8000
 

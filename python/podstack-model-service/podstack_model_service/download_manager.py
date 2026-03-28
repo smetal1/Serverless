@@ -185,21 +185,25 @@ def _make_progress_class(task: DownloadTask):
 
     class _ProgressTracker(_tqdm_base):
         def __init__(self, *args, **kwargs):
+            # Set our attrs before super().__init__ since tqdm may call
+            # close()/update() during init.
+            self._task = task
+            self._desc_key = kwargs.get("desc", "")
             kwargs["disable"] = True  # suppress all terminal output
             super().__init__(*args, **kwargs)
-            self._task = task
 
-            if self.total and self.desc:
+            if self.total and self._desc_key:
                 fp = FileProgress(
-                    filename=self.desc,
+                    filename=self._desc_key,
                     total_bytes=self.total,
                 )
-                self._task._file_progress[self.desc] = fp
+                self._task._file_progress[self._desc_key] = fp
 
         def update(self, n=1):
             super().update(n)
-            if self.desc and self.desc in self._task._file_progress:
-                fp = self._task._file_progress[self.desc]
+            desc = getattr(self, "_desc_key", "")
+            if desc and desc in self._task._file_progress:
+                fp = self._task._file_progress[desc]
                 fp.downloaded_bytes += n
 
             total_downloaded = sum(
@@ -209,7 +213,8 @@ def _make_progress_class(task: DownloadTask):
 
         def close(self):
             super().close()
-            if self.desc and self.desc in self._task._file_progress:
+            desc = getattr(self, "_desc_key", "")
+            if desc and desc in self._task._file_progress:
                 self._task.completed_files = sum(
                     1 for fp in self._task._file_progress.values()
                     if fp.downloaded_bytes >= fp.total_bytes

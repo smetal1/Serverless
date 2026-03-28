@@ -698,6 +698,10 @@ spec:
               value: /models
             - name: PORT
               value: "8000"
+            - name: HF_HUB_DISABLE_XET
+              value: "1"
+            - name: HF_HUB_ENABLE_HF_TRANSFER
+              value: "0"
           resources:
             requests:
               cpu: 100m
