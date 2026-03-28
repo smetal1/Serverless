@@ -1,0 +1,281 @@
+# Podstack Inference OS - Serverless Namespace Deployment
+# ======================================================
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: serverless
+  labels:
+    app.kubernetes.io/name: podstack
+    app.kubernetes.io/part-of: podstack-inference-os
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: podstack-operator
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-operator
+    app.kubernetes.io/part-of: podstack-inference-os
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: podstack-operator
+  labels:
+    app.kubernetes.io/name: podstack-operator
+    app.kubernetes.io/part-of: podstack-inference-os
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, configmaps, events, persistentvolumeclaims, secrets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["apps"]
+    resources: [deployments, replicasets, statefulsets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, create]
+  - apiGroups: ["podstack.io"]
+    resources: [modeldeployments, snapshots, loraadapters, tenants]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["podstack.io"]
+    resources: [modeldeployments/status, snapshots/status, loraadapters/status, tenants/status]
+    verbs: [get, update, patch]
+  - apiGroups: ["podstack.io"]
+    resources: [modeldeployments/finalizers, snapshots/finalizers, loraadapters/finalizers, tenants/finalizers]
+    verbs: [update]
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [roles, rolebindings]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [resourcequotas]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: podstack-operator
+  labels:
+    app.kubernetes.io/name: podstack-operator
+    app.kubernetes.io/part-of: podstack-inference-os
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: podstack-operator
+subjects:
+  - kind: ServiceAccount
+    name: podstack-operator
+    namespace: serverless
+---
+# Operator Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podstack-operator
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-operator
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: podstack-operator
+      app.kubernetes.io/component: operator
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: podstack-operator
+        app.kubernetes.io/part-of: podstack-inference-os
+        app.kubernetes.io/component: operator
+    spec:
+      serviceAccountName: podstack-operator
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: operator
+          image: saurav7055/podstack-operator:dev
+          imagePullPolicy: Always
+          args:
+            - --leader-elect=true
+            - --metrics-bind-address=:8081
+            - --health-probe-bind-address=:8082
+            - --namespace=serverless
+            - --nfs-base-path=/tmp/podstack/models
+            - --snapshot-base-path=/tmp/podstack/snapshots
+          ports:
+            - name: metrics
+              containerPort: 8081
+              protocol: TCP
+            - name: health
+              containerPort: 8082
+              protocol: TCP
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      nodeSelector:
+        kubernetes.io/os: linux
+---
+# Gateway ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: podstack-gateway-config
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-gateway
+    app.kubernetes.io/part-of: podstack-inference-os
+data:
+  gateway-config.yaml: |
+    server:
+      addr: ":8080"
+      readTimeout: 30s
+      writeTimeout: 120s
+    namespace: serverless
+    routing:
+      coldStartTimeout: 300s
+      coldStartPollInterval: 500ms
+    rateLimit:
+      defaultRequestsPerMinute: 60
+    logging:
+      level: info
+      format: json
+---
+# Gateway Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podstack-gateway
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-gateway
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: podstack-gateway
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: podstack-gateway
+        app.kubernetes.io/part-of: podstack-inference-os
+        app.kubernetes.io/component: gateway
+    spec:
+      serviceAccountName: podstack-operator
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: gateway
+          image: saurav7055/podstack-gateway:dev
+          imagePullPolicy: Always
+          args:
+            - --addr=:8080
+            - --namespace=serverless
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          volumeMounts:
+            - name: gateway-config
+              mountPath: /etc/podstack
+              readOnly: true
+      volumes:
+        - name: gateway-config
+          configMap:
+            name: podstack-gateway-config
+      nodeSelector:
+        kubernetes.io/os: linux
+---
+# Gateway Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: podstack-gateway
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-gateway
+    app.kubernetes.io/part-of: podstack-inference-os
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: podstack-gateway
+    app.kubernetes.io/component: gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP

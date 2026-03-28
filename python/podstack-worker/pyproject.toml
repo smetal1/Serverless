@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "podstack-worker"
+version = "0.1.0"
+description = "Podstack in-container model runtime agent"
+requires-python = ">=3.10"
+dependencies = [
+    "uvicorn>=0.27.0",
+    "fastapi>=0.109.0",
+    "safetensors>=0.4.0",
+    "torch>=2.1.0",
+    "httpx>=0.26.0",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+podstack-worker = "podstack_worker.runtime:main"

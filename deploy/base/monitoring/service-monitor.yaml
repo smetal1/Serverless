@@ -1,0 +1,120 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: podstack-gateway
+  namespace: podstack-system
+  labels:
+    app.kubernetes.io/name: podstack-gateway
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: monitoring
+    podstack.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: podstack-gateway
+      app.kubernetes.io/component: gateway
+  namespaceSelector:
+    matchNames:
+      - podstack-system
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 10s
+      scrapeTimeout: 5s
+      honorLabels: true
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: podstack-operator
+  namespace: podstack-system
+  labels:
+    app.kubernetes.io/name: podstack-operator
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: monitoring
+    podstack.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: podstack-operator
+      app.kubernetes.io/component: operator
+  namespaceSelector:
+    matchNames:
+      - podstack-system
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      honorLabels: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: podstack-operator-metrics
+  namespace: podstack-system
+  labels:
+    app.kubernetes.io/name: podstack-operator
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: operator
+    podstack.io/component: operator
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: podstack-operator
+    app.kubernetes.io/component: operator
+  ports:
+    - name: metrics
+      port: 8081
+      targetPort: 8081
+      protocol: TCP
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: podstack-proxy
+  namespace: podstack-system
+  labels:
+    app.kubernetes.io/name: podstack-proxy
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: monitoring
+    podstack.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: podstack-proxy
+      app.kubernetes.io/component: proxy
+  namespaceSelector:
+    matchNames:
+      - podstack-system
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      honorLabels: true
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dcgm-exporter
+  namespace: podstack-system
+  labels:
+    app.kubernetes.io/name: dcgm-exporter
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: monitoring
+    podstack.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dcgm-exporter
+      app.kubernetes.io/component: monitoring
+  namespaceSelector:
+    matchNames:
+      - podstack-system
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      honorLabels: true

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "podstack"
+version = "0.1.0"
+description = "Podstack Inference OS SDK - deploy and manage GPU models"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.26.0",
+    "pydantic>=2.0.0",
+    "click>=8.1.0",
+    "pyyaml>=6.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+podstack = "podstack.cli:cli"

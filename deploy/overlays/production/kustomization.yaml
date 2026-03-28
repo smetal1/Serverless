@@ -1,0 +1,130 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: podstack-system
+
+commonLabels:
+  podstack.io/environment: production
+
+commonAnnotations:
+  podstack.io/managed-by: kustomize
+  podstack.io/environment: production
+
+resources:
+  - ../../base
+
+# Production image tags - pin to specific versions
+images:
+  - name: podstack/operator
+    newTag: v1.0.0
+  - name: podstack/gateway
+    newTag: v1.0.0
+  - name: podstack/proxy
+    newTag: v1.0.0
+
+patches:
+  # Gateway: 3 replicas for HA
+  - target:
+      kind: Deployment
+      name: podstack-gateway
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 3
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 500m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "2"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 1Gi
+
+  # Proxy: 3 replicas for HA
+  - target:
+      kind: Deployment
+      name: podstack-proxy
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 3
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 500m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "2"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 1Gi
+
+  # Operator: production resources
+  - target:
+      kind: Deployment
+      name: podstack-operator
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 250m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "1"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 1Gi
+
+  # Production gateway config: stricter rate limits, info logging
+  - target:
+      kind: ConfigMap
+      name: podstack-gateway-config
+    patch: |
+      - op: replace
+        path: /data/gateway-config.yaml
+        value: |
+          server:
+            addr: ":8080"
+            readTimeout: 30s
+            writeTimeout: 120s
+          namespace: podstack-system
+          prometheus:
+            address: http://prometheus-server.monitoring.svc.cluster.local:9090
+          routing:
+            coldStartTimeout: 300s
+            coldStartPollInterval: 500ms
+            maxConcurrentPerReplica: 64
+          rateLimit:
+            defaultRequestsPerMinute: 60
+            burstSize: 10
+          healthCheck:
+            interval: 10s
+            timeout: 5s
+            failureThreshold: 3
+          logging:
+            level: info
+            format: json
+
+  # PodDisruptionBudget for gateway
+  - target:
+      kind: Deployment
+      name: podstack-gateway
+    patch: |
+      - op: add
+        path: /metadata/annotations/podstack.io~1pdb-enabled
+        value: "true"
+
+# Additional production resources
+patchesStrategicMerge: []
+
+# Generate PDB for critical components
+generatorOptions:
+  disableNameSuffixHash: true

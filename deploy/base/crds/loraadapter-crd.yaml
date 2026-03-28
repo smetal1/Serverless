@@ -1,0 +1,186 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: loraadapters.podstack.io
+  labels:
+    app.kubernetes.io/name: podstack
+    app.kubernetes.io/part-of: podstack-inference-os
+    podstack.io/component: crd
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+spec:
+  group: podstack.io
+  names:
+    kind: LoRAAdapter
+    listKind: LoRAAdapterList
+    plural: loraadapters
+    singular: loraadapter
+    shortNames:
+      - lora
+      - loras
+    categories:
+      - podstack
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Adapter
+          type: string
+          jsonPath: .spec.adapterName
+        - name: BaseModel
+          type: string
+          jsonPath: .spec.baseModelRef
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Tenant
+          type: string
+          jsonPath: .spec.tenantRef
+      schema:
+        openAPIV3Schema:
+          description: >-
+            LoRAAdapter is the Schema for the loraadapters API. It represents
+            a LoRA adapter that can be hot-swapped onto a base model at runtime.
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              description: >-
+                APIVersion defines the versioned schema of this representation
+                of an object.
+              type: string
+            kind:
+              description: >-
+                Kind is a string value representing the REST resource this
+                object represents.
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: >-
+                LoRAAdapterSpec defines the desired state of a LoRA adapter.
+              type: object
+              required:
+                - adapterName
+                - baseModelRef
+                - source
+                - sourcePath
+              properties:
+                adapterName:
+                  description: >-
+                    AdapterName is the human-readable name of the adapter.
+                  type: string
+                  minLength: 1
+                baseModelRef:
+                  description: >-
+                    BaseModelRef is the name of the ModelDeployment this
+                    adapter targets.
+                  type: string
+                  minLength: 1
+                source:
+                  description: >-
+                    Source is where to download the adapter from.
+                  type: string
+                  enum:
+                    - huggingface
+                    - nfs
+                    - s3
+                sourcePath:
+                  description: >-
+                    SourcePath is the HuggingFace ID, NFS path, or S3 URI.
+                  type: string
+                  minLength: 1
+                tenantRef:
+                  description: TenantRef is the owning tenant.
+                  type: string
+                autoLoad:
+                  description: >-
+                    AutoLoad automatically loads the adapter when the base
+                    model is active.
+                  type: boolean
+            status:
+              description: >-
+                LoRAAdapterStatus defines the observed state of a LoRA adapter.
+              type: object
+              properties:
+                phase:
+                  description: >-
+                    Phase is the adapter lifecycle.
+                  type: string
+                  enum:
+                    - Downloading
+                    - Cached
+                    - Loaded
+                    - Failed
+                cachePath:
+                  description: >-
+                    CachePath is the NFS path where the adapter weights are
+                    stored.
+                  type: string
+                loadedOnPods:
+                  description: >-
+                    LoadedOnPods lists the pod names where this adapter is
+                    currently loaded.
+                  type: array
+                  items:
+                    type: string
+                message:
+                  description: >-
+                    Message provides additional status information.
+                  type: string
+                conditions:
+                  description: >-
+                    Conditions represent the latest available observations.
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                      - reason
+                      - message
+                    properties:
+                      type:
+                        description: Type of condition.
+                        type: string
+                        maxLength: 316
+                      status:
+                        description: Status of the condition.
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      observedGeneration:
+                        description: >-
+                          ObservedGeneration represents the generation that
+                          the condition was set based upon.
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      lastTransitionTime:
+                        description: >-
+                          LastTransitionTime is the last time the condition
+                          transitioned from one status to another.
+                        type: string
+                        format: date-time
+                      reason:
+                        description: >-
+                          Reason contains a programmatic identifier indicating
+                          the reason for the condition's last transition.
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      message:
+                        description: >-
+                          Message is a human readable message indicating
+                          details about the transition.
+                        type: string
+                        maxLength: 32768

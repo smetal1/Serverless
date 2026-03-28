@@ -1,0 +1,132 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: podstack-prometheus-config
+  namespace: podstack-system
+  labels:
+    app.kubernetes.io/name: podstack-prometheus
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: monitoring
+    podstack.io/component: monitoring
+data:
+  prometheus-podstack.yaml: |
+    # Podstack-specific Prometheus scrape configuration.
+    # Merge this into your existing Prometheus config or use as additional_scrape_configs.
+
+    scrape_configs:
+      # DCGM GPU Metrics Exporter
+      - job_name: 'dcgm-exporter'
+        scrape_interval: 15s
+        scrape_timeout: 10s
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - podstack-system
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            regex: dcgm-exporter
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+            target_label: __address__
+            regex: (.+)
+            replacement: ${1}:$1
+            action: replace
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            target_label: node
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+        metric_relabel_configs:
+          - source_labels: [__name__]
+            regex: 'DCGM_FI_DEV_(GPU_UTIL|MEM_COPY_UTIL|FB_USED|FB_FREE|POWER_USAGE|GPU_TEMP|SM_CLOCK|MEM_CLOCK)'
+            action: keep
+
+      # Podstack Gateway Metrics
+      - job_name: 'podstack-gateway'
+        scrape_interval: 10s
+        scrape_timeout: 5s
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - podstack-system
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            regex: podstack-gateway
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+            target_label: __address__
+            regex: (.+)
+            replacement: $1:${1}
+            action: replace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
+      # Podstack Operator Metrics
+      - job_name: 'podstack-operator'
+        scrape_interval: 15s
+        scrape_timeout: 10s
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - podstack-system
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            regex: podstack-operator
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+            target_label: __address__
+            regex: (.+)
+            replacement: $1:${1}
+            action: replace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
+      # Podstack Proxy (LiteLLM) Metrics
+      - job_name: 'podstack-proxy'
+        scrape_interval: 15s
+        scrape_timeout: 10s
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - podstack-system
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            regex: podstack-proxy
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+            target_label: __address__
+            regex: (.+)
+            replacement: $1:${1}
+            action: replace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
+      # Model Worker Pods (dynamically discovered)
+      - job_name: 'podstack-workers'
+        scrape_interval: 15s
+        scrape_timeout: 10s
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_podstack_io_component]
+            regex: worker
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            regex: "true"
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+            target_label: __address__
+            regex: (.+)
+            replacement: $1:${1}
+            action: replace
+          - source_labels: [__meta_kubernetes_pod_label_podstack_io_model]
+            target_label: model
+          - source_labels: [__meta_kubernetes_pod_label_podstack_io_runtime]
+            target_label: runtime
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace

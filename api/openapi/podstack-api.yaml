@@ -1,0 +1,458 @@
+openapi: 3.0.3
+info:
+  title: Podstack Inference OS API
+  description: |
+    OpenAI-compatible API for the Podstack Inference OS.
+    Supports LLMs, diffusion models, ASR, TTS, and custom inference.
+  version: 1.0.0
+  contact:
+    name: Podstack
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: https://api.podstack.io
+    description: Production
+
+security:
+  - BearerAuth: []
+
+paths:
+  /v1/chat/completions:
+    post:
+      summary: Create chat completion
+      operationId: createChatCompletion
+      tags: [Inference]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+      responses:
+        '200':
+          description: Chat completion response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponse'
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream of ChatCompletionChunk objects
+        '503':
+          description: Model cold starting
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ColdStartResponse'
+
+  /v1/completions:
+    post:
+      summary: Create text completion
+      operationId: createCompletion
+      tags: [Inference]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompletionRequest'
+      responses:
+        '200':
+          description: Completion response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompletionResponse'
+
+  /v1/embeddings:
+    post:
+      summary: Create embeddings
+      operationId: createEmbedding
+      tags: [Inference]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingRequest'
+      responses:
+        '200':
+          description: Embedding response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingResponse'
+
+  /v1/images/generations:
+    post:
+      summary: Create image
+      operationId: createImage
+      tags: [Inference]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImageGenerationRequest'
+      responses:
+        '200':
+          description: Image generation response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageGenerationResponse'
+
+  /v1/audio/transcriptions:
+    post:
+      summary: Create transcription
+      operationId: createTranscription
+      tags: [Inference]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AudioTranscriptionRequest'
+      responses:
+        '200':
+          description: Transcription response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AudioTranscriptionResponse'
+
+  /v1/audio/speech:
+    post:
+      summary: Create speech
+      operationId: createSpeech
+      tags: [Inference]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AudioSpeechRequest'
+      responses:
+        '200':
+          description: Audio response
+          content:
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+
+  /v1/models:
+    get:
+      summary: List models
+      operationId: listModels
+      tags: [Models]
+      responses:
+        '200':
+          description: Model list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelListResponse'
+
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /ready:
+    get:
+      summary: Readiness check
+      operationId: readinessCheck
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: Ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: API key authentication. Use tenant API key as bearer token.
+
+  schemas:
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model:
+          type: string
+          description: Model ID or tenant/model path for LoRA
+          example: meta-llama/Llama-3.1-8B-Instruct
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+        temperature:
+          type: number
+          default: 1.0
+        max_tokens:
+          type: integer
+        stream:
+          type: boolean
+          default: false
+        top_p:
+          type: number
+          default: 1.0
+        frequency_penalty:
+          type: number
+          default: 0
+        presence_penalty:
+          type: number
+          default: 0
+        stop:
+          type: array
+          items:
+            type: string
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant]
+        content:
+          type: string
+
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          enum: [chat.completion]
+        created:
+          type: integer
+          format: int64
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              message:
+                $ref: '#/components/schemas/ChatMessage'
+              finish_reason:
+                type: string
+                enum: [stop, length, content_filter]
+        usage:
+          $ref: '#/components/schemas/Usage'
+
+    CompletionRequest:
+      type: object
+      required: [model, prompt]
+      properties:
+        model:
+          type: string
+        prompt:
+          type: string
+        max_tokens:
+          type: integer
+        temperature:
+          type: number
+        stream:
+          type: boolean
+
+    CompletionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+        created:
+          type: integer
+          format: int64
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              text:
+                type: string
+              finish_reason:
+                type: string
+        usage:
+          $ref: '#/components/schemas/Usage'
+
+    EmbeddingRequest:
+      type: object
+      required: [model, input]
+      properties:
+        model:
+          type: string
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+
+    EmbeddingResponse:
+      type: object
+      properties:
+        object:
+          type: string
+        model:
+          type: string
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              object:
+                type: string
+              embedding:
+                type: array
+                items:
+                  type: number
+        usage:
+          $ref: '#/components/schemas/Usage'
+
+    ImageGenerationRequest:
+      type: object
+      required: [model, prompt]
+      properties:
+        model:
+          type: string
+        prompt:
+          type: string
+        n:
+          type: integer
+          default: 1
+        size:
+          type: string
+          default: 1024x1024
+
+    ImageGenerationResponse:
+      type: object
+      properties:
+        created:
+          type: integer
+          format: int64
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              url:
+                type: string
+              b64_json:
+                type: string
+
+    AudioTranscriptionRequest:
+      type: object
+      required: [model, file]
+      properties:
+        model:
+          type: string
+        file:
+          type: string
+          format: binary
+        language:
+          type: string
+
+    AudioTranscriptionResponse:
+      type: object
+      properties:
+        text:
+          type: string
+
+    AudioSpeechRequest:
+      type: object
+      required: [model, input]
+      properties:
+        model:
+          type: string
+        input:
+          type: string
+        voice:
+          type: string
+        response_format:
+          type: string
+          default: mp3
+
+    ModelListResponse:
+      type: object
+      properties:
+        object:
+          type: string
+          enum: [list]
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              object:
+                type: string
+                enum: [model]
+              created:
+                type: integer
+                format: int64
+              owned_by:
+                type: string
+
+    Usage:
+      type: object
+      properties:
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+
+    ColdStartResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Model is cold starting
+        estimated_wait_ms:
+          type: integer
+          example: 2000
+        retry_after:
+          type: integer
+          description: Seconds to wait before retrying
+          example: 3

@@ -1,0 +1,115 @@
+syntax = "proto3";
+
+package podstack.v1;
+
+option go_package = "github.com/podstack/serverless/api/proto/podstack/v1;podstackv1";
+
+// TenantService manages multi-tenant resources.
+service TenantService {
+  // CreateTenant provisions a new tenant.
+  rpc CreateTenant(CreateTenantRequest) returns (TenantInfo);
+
+  // GetTenant returns tenant details.
+  rpc GetTenant(GetTenantRequest) returns (TenantInfo);
+
+  // ListTenants returns all tenants.
+  rpc ListTenants(ListTenantsRequest) returns (ListTenantsResponse);
+
+  // UpdateTenant updates tenant configuration.
+  rpc UpdateTenant(UpdateTenantRequest) returns (TenantInfo);
+
+  // DeleteTenant removes a tenant.
+  rpc DeleteTenant(DeleteTenantRequest) returns (DeleteTenantResponse);
+
+  // CreateAPIKey generates a new API key for a tenant.
+  rpc CreateAPIKey(CreateAPIKeyRequest) returns (CreateAPIKeyResponse);
+
+  // RevokeAPIKey revokes an API key.
+  rpc RevokeAPIKey(RevokeAPIKeyRequest) returns (RevokeAPIKeyResponse);
+
+  // GetUsage returns resource usage for a tenant.
+  rpc GetUsage(GetUsageRequest) returns (UsageResponse);
+}
+
+message CreateTenantRequest {
+  string name = 1;
+  string display_name = 2;
+  TenantQuota quota = 3;
+}
+
+message GetTenantRequest {
+  string name = 1;
+}
+
+message ListTenantsRequest {}
+
+message ListTenantsResponse {
+  repeated TenantInfo tenants = 1;
+}
+
+message UpdateTenantRequest {
+  string name = 1;
+  string display_name = 2;
+  TenantQuota quota = 3;
+}
+
+message DeleteTenantRequest {
+  string name = 1;
+}
+
+message DeleteTenantResponse {}
+
+message TenantInfo {
+  string name = 1;
+  string display_name = 2;
+  string namespace = 3;
+  string phase = 4;
+  TenantQuota quota = 5;
+  TenantUsage usage = 6;
+  int32 api_key_count = 7;
+}
+
+message TenantQuota {
+  int32 max_models = 1;
+  int32 max_gpus = 2;
+  int32 max_vram_mb = 3;
+  int32 max_requests_per_minute = 4;
+  int64 budget_cents_per_month = 5;
+}
+
+message TenantUsage {
+  int32 active_models = 1;
+  int32 gpus_in_use = 2;
+  int32 vram_used_mb = 3;
+  int64 current_spend_cents = 4;
+  int64 total_requests = 5;
+  int64 total_input_tokens = 6;
+  int64 total_output_tokens = 7;
+}
+
+message CreateAPIKeyRequest {
+  string tenant_name = 1;
+  string key_name = 2;
+}
+
+message CreateAPIKeyResponse {
+  // The plaintext API key — only returned once at creation time.
+  string api_key = 1;
+  string key_name = 2;
+  string key_hash = 3;
+}
+
+message RevokeAPIKeyRequest {
+  string tenant_name = 1;
+  string key_name = 2;
+}
+
+message RevokeAPIKeyResponse {}
+
+message GetUsageRequest {
+  string tenant_name = 1;
+}
+
+message UsageResponse {
+  TenantUsage usage = 1;
+}

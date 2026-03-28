@@ -1,0 +1,118 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: podstack-operator
+  labels:
+    app.kubernetes.io/name: podstack-operator
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: operator
+    podstack.io/component: operator
+rules:
+  # Core resources - full CRUD
+  - apiGroups: [""]
+    resources:
+      - pods
+      - services
+      - configmaps
+      - events
+      - persistentvolumeclaims
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - replicasets
+      - statefulsets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  # Namespaces - limited access
+  - apiGroups: [""]
+    resources:
+      - namespaces
+    verbs:
+      - get
+      - list
+      - create
+  # Podstack CRDs - full CRUD + status
+  - apiGroups: ["podstack.io"]
+    resources:
+      - modeldeployments
+      - snapshots
+      - loraadapters
+      - tenants
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups: ["podstack.io"]
+    resources:
+      - modeldeployments/status
+      - snapshots/status
+      - loraadapters/status
+      - tenants/status
+    verbs:
+      - get
+      - update
+      - patch
+  # Events for recording lifecycle transitions
+  - apiGroups: [""]
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+  # Nodes for GPU topology awareness
+  - apiGroups: [""]
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+  # Coordination for leader election
+  - apiGroups: ["coordination.k8s.io"]
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: podstack-operator
+  labels:
+    app.kubernetes.io/name: podstack-operator
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: operator
+    podstack.io/component: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: podstack-operator
+subjects:
+  - kind: ServiceAccount
+    name: podstack-operator
+    namespace: podstack-system

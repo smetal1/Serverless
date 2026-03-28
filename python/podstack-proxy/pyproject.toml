@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "podstack-proxy"
+version = "0.1.0"
+description = "Podstack LiteLLM extensions for multi-tenant model routing"
+requires-python = ">=3.10"
+dependencies = [
+    "litellm>=1.30.0",
+    "fastapi>=0.109.0",
+    "httpx>=0.26.0",
+    "pydantic>=2.0.0",
+    "prometheus-client>=0.20.0",
+]
+
+[project.scripts]
+podstack-proxy = "podstack_proxy.server:main"

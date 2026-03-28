@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: podstack-nfs-models
+  labels:
+    app.kubernetes.io/name: podstack
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: storage
+    podstack.io/component: storage
+    podstack.io/storage-type: nfs-models
+spec:
+  capacity:
+    storage: 1Ti
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: podstack-nfs
+  mountOptions:
+    - nconnect=8
+    - rsize=1048576
+    - wsize=1048576
+    - nfsvers=4.1
+    - hard
+    - intr
+    - timeo=600
+    - retrans=2
+  nfs:
+    path: /exports/podstack
+    server: nfs-server.local
+    readOnly: false

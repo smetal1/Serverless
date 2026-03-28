@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dcgm-exporter
+  namespace: podstack-system
+  labels:
+    app.kubernetes.io/name: dcgm-exporter
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: monitoring
+    podstack.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dcgm-exporter
+      app.kubernetes.io/component: monitoring
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dcgm-exporter
+        app.kubernetes.io/part-of: podstack-inference-os
+        app.kubernetes.io/component: monitoring
+        podstack.io/component: monitoring
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9400"
+        prometheus.io/path: /metrics
+    spec:
+      hostNetwork: true
+      hostPID: true
+      terminationGracePeriodSeconds: 15
+      containers:
+        - name: dcgm-exporter
+          image: nvcr.io/nvidia/k8s/dcgm-exporter:3.3.5-3.4.1-ubuntu22.04
+          imagePullPolicy: IfNotPresent
+          args:
+            - -f
+            - /etc/dcgm-exporter/dcp-metrics-included.csv
+          ports:
+            - name: metrics
+              containerPort: 9400
+              hostPort: 9400
+              protocol: TCP
+          env:
+            - name: DCGM_EXPORTER_KUBERNETES
+              value: "true"
+            - name: DCGM_EXPORTER_LISTEN
+              value: ":9400"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          volumeMounts:
+            - name: device-plugins
+              mountPath: /var/lib/kubelet/device-plugins
+              readOnly: true
+            - name: nvidia-install-dir-host
+              mountPath: /usr/local/nvidia
+              readOnly: true
+            - name: proc
+              mountPath: /host/proc
+              readOnly: true
+            - name: sys
+              mountPath: /host/sys
+              readOnly: true
+      volumes:
+        - name: device-plugins
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+        - name: nvidia-install-dir-host
+          hostPath:
+            path: /usr/local/nvidia
+        - name: proc
+          hostPath:
+            path: /proc
+        - name: sys
+          hostPath:
+            path: /sys
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/gpu-worker
+          operator: Exists
+          effect: NoSchedule

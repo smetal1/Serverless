@@ -1,0 +1,127 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: podstack-system
+
+commonLabels:
+  podstack.io/environment: dev
+
+resources:
+  - ../../base
+
+# Dev-specific image overrides
+images:
+  - name: podstack/operator
+    newTag: dev
+  - name: podstack/gateway
+    newTag: dev
+  - name: podstack/proxy
+    newTag: dev
+
+# Reduce replicas for dev
+patches:
+  # Gateway: single replica
+  - target:
+      kind: Deployment
+      name: podstack-gateway
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: remove
+        path: /spec/template/spec/topologySpreadConstraints
+
+  # Proxy: single replica
+  - target:
+      kind: Deployment
+      name: podstack-proxy
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: remove
+        path: /spec/template/spec/topologySpreadConstraints
+
+  # Operator: reduced resources
+  - target:
+      kind: Deployment
+      name: podstack-operator
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 50m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 128Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: 250m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 256Mi
+
+  # Gateway: reduced resources and debug logging
+  - target:
+      kind: Deployment
+      name: podstack-gateway
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 100m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 128Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: 500m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 256Mi
+
+  # Proxy: reduced resources
+  - target:
+      kind: Deployment
+      name: podstack-proxy
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 100m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 128Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: 500m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 256Mi
+
+  # Gateway ConfigMap: debug logging
+  - target:
+      kind: ConfigMap
+      name: podstack-gateway-config
+    patch: |
+      - op: replace
+        path: /data/gateway-config.yaml
+        value: |
+          server:
+            addr: ":8080"
+            readTimeout: 60s
+            writeTimeout: 300s
+          namespace: podstack-system
+          prometheus:
+            address: http://prometheus-server.monitoring.svc.cluster.local:9090
+          routing:
+            coldStartTimeout: 600s
+            coldStartPollInterval: 1s
+            maxConcurrentPerReplica: 16
+          rateLimit:
+            defaultRequestsPerMinute: 1000
+            burstSize: 100
+          healthCheck:
+            interval: 10s
+            timeout: 5s
+            failureThreshold: 3
+          logging:
+            level: debug
+            format: text

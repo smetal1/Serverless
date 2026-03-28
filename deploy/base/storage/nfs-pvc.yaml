@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: podstack-nfs-models
+  namespace: podstack-system
+  labels:
+    app.kubernetes.io/name: podstack
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: storage
+    podstack.io/component: storage
+    podstack.io/storage-type: nfs-models
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: podstack-nfs
+  volumeName: podstack-nfs-models
+  resources:
+    requests:
+      storage: 1Ti

@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: podstack-proxy-config
+  namespace: podstack-system
+  labels:
+    app.kubernetes.io/name: podstack-proxy
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: proxy
+    podstack.io/component: proxy
+data:
+  litellm-config.yaml: |
+    # LiteLLM Proxy Configuration for Podstack Inference OS
+    # Models are dynamically registered by the operator via the gateway.
+    # This config provides the base proxy settings.
+
+    general_settings:
+      master_key: "sk-podstack-master-key"
+      database_url: null
+      custom_auth: null
+      max_parallel_requests: 1000
+      global_max_parallel_requests: 5000
+      infer_model_from_keys: true
+
+    litellm_settings:
+      drop_params: true
+      set_verbose: false
+      num_retries: 2
+      request_timeout: 300
+      telemetry: false
+      cache: true
+      cache_params:
+        type: local
+        ttl: 600
+
+    model_list:
+      # Models are dynamically populated by the Podstack operator.
+      # Each ModelDeployment CR creates a corresponding entry here.
+      # Example static fallback entry:
+      - model_name: "health-check"
+        litellm_params:
+          model: "openai/health-check"
+          api_base: "http://localhost:4000"
+          api_key: "sk-podstack-health"
+
+    router_settings:
+      routing_strategy: "usage-based-routing-v2"
+      num_retries: 2
+      timeout: 300
+      retry_after: 5
+      allowed_fails: 3
+      cooldown_time: 60
+
+    environment_variables:
+      OPENAI_API_KEY: "sk-podstack-unused"

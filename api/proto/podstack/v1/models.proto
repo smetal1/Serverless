@@ -1,0 +1,140 @@
+syntax = "proto3";
+
+package podstack.v1;
+
+option go_package = "github.com/podstack/serverless/api/proto/podstack/v1;podstackv1";
+
+import "google/protobuf/timestamp.proto";
+
+// ModelService manages model deployments.
+service ModelService {
+  // ListModels returns all available model deployments.
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+
+  // GetModel returns a specific model deployment.
+  rpc GetModel(GetModelRequest) returns (ModelDeploymentInfo);
+
+  // CreateModel creates a new model deployment.
+  rpc CreateModel(CreateModelRequest) returns (ModelDeploymentInfo);
+
+  // DeleteModel removes a model deployment.
+  rpc DeleteModel(DeleteModelRequest) returns (DeleteModelResponse);
+
+  // GetModelStatus returns the current status of a model deployment.
+  rpc GetModelStatus(GetModelStatusRequest) returns (ModelStatus);
+
+  // CreateSnapshot manually triggers a CUDA snapshot.
+  rpc CreateSnapshot(CreateSnapshotRequest) returns (SnapshotInfo);
+
+  // ListSnapshots returns all snapshots.
+  rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse);
+}
+
+message ListModelsRequest {
+  string tenant = 1;
+  string namespace = 2;
+}
+
+message ListModelsResponse {
+  repeated ModelDeploymentInfo models = 1;
+}
+
+message GetModelRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+message CreateModelRequest {
+  string name = 1;
+  string namespace = 2;
+  string model_name = 3;
+  string model_source = 4;
+  string model_type = 5;
+  string runtime = 6;
+  GPURequirements gpu = 7;
+  ScalingConfig scaling = 8;
+  SnapshotConfig snapshot = 9;
+  string tenant = 10;
+}
+
+message DeleteModelRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+message DeleteModelResponse {}
+
+message GetModelStatusRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+message ModelDeploymentInfo {
+  string name = 1;
+  string namespace = 2;
+  string model_name = 3;
+  string model_source = 4;
+  string model_type = 5;
+  string runtime = 6;
+  GPURequirements gpu = 7;
+  ScalingConfig scaling = 8;
+  SnapshotConfig snapshot = 9;
+  string tenant = 10;
+  ModelStatus status = 11;
+}
+
+message GPURequirements {
+  int32 count = 1;
+  int32 memory_mb = 2;
+  int32 cores_percent = 3;
+  string type = 4;
+}
+
+message ScalingConfig {
+  int32 min_replicas = 1;
+  int32 max_replicas = 2;
+  int32 idle_timeout_seconds = 3;
+  int32 standby_pool = 4;
+}
+
+message SnapshotConfig {
+  bool enabled = 1;
+  bool auto_snapshot = 2;
+  int32 warmup_requests = 3;
+}
+
+message ModelStatus {
+  string phase = 1;
+  int32 ready_replicas = 2;
+  int32 standby_replicas = 3;
+  string endpoint = 4;
+  string snapshot_ref = 5;
+  int32 vram_used_mb = 6;
+  google.protobuf.Timestamp last_request_at = 7;
+  int64 cold_start_ms = 8;
+}
+
+message CreateSnapshotRequest {
+  string model_name = 1;
+  string namespace = 2;
+}
+
+message SnapshotInfo {
+  string name = 1;
+  string model_deployment_ref = 2;
+  string storage_path = 3;
+  string gpu_type = 4;
+  string cuda_version = 5;
+  int64 size_bytes = 6;
+  string phase = 7;
+  int64 restore_time_ms = 8;
+  bool verified = 9;
+}
+
+message ListSnapshotsRequest {
+  string namespace = 1;
+}
+
+message ListSnapshotsResponse {
+  repeated SnapshotInfo snapshots = 1;
+}

@@ -1,0 +1,26 @@
+apiVersion: podstack.io/v1
+kind: Tenant
+metadata:
+  name: acme-corp
+  namespace: podstack-system
+  labels:
+    app.kubernetes.io/name: acme-corp
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: tenant
+    podstack.io/component: tenant
+spec:
+  displayName: Acme Corp
+  namespace: podstack-tenant-acme-corp
+  apiKeys:
+    - name: production-key
+      # SHA-256 hash of the API key (plaintext never stored)
+      # Example: echo -n "sk-acme-prod-xxxxxxxxxxxxxxxxxxxx" | sha256sum
+      keyHash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+    - name: staging-key
+      keyHash: "f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5"
+  quota:
+    maxModels: 10
+    maxGPUs: 8
+    maxVRAMMB: 192000
+    maxRequestsPerMinute: 600
+    budgetCentsPerMonth: 500000

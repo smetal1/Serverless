@@ -1,0 +1,237 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tenants.podstack.io
+  labels:
+    app.kubernetes.io/name: podstack
+    app.kubernetes.io/part-of: podstack-inference-os
+    podstack.io/component: crd
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+spec:
+  group: podstack.io
+  names:
+    kind: Tenant
+    listKind: TenantList
+    plural: tenants
+    singular: tenant
+    shortNames:
+      - tn
+    categories:
+      - podstack
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Display
+          type: string
+          jsonPath: .spec.displayName
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Models
+          type: integer
+          jsonPath: .status.activeModels
+        - name: GPUs
+          type: integer
+          jsonPath: .status.gpusInUse
+        - name: VRAM(MB)
+          type: integer
+          jsonPath: .status.vramUsedMB
+      schema:
+        openAPIV3Schema:
+          description: >-
+            Tenant is the Schema for the tenants API. It represents a tenant
+            in the multi-tenant Podstack Inference OS.
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              description: >-
+                APIVersion defines the versioned schema of this representation
+                of an object.
+              type: string
+            kind:
+              description: >-
+                Kind is a string value representing the REST resource this
+                object represents.
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: TenantSpec defines the desired state of a Tenant.
+              type: object
+              required:
+                - displayName
+                - apiKeys
+                - quota
+              properties:
+                displayName:
+                  description: >-
+                    DisplayName is a human-readable name for the tenant.
+                  type: string
+                  minLength: 1
+                namespace:
+                  description: >-
+                    Namespace is the Kubernetes namespace for this tenant's
+                    resources. If empty, defaults to
+                    "podstack-tenant-{name}".
+                  type: string
+                apiKeys:
+                  description: >-
+                    APIKeys is a list of API key hashes for authentication.
+                    Keys are SHA-256 hashed; plaintext is never stored.
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - keyHash
+                    properties:
+                      name:
+                        description: >-
+                          Name is a human-readable identifier for the key.
+                        type: string
+                        minLength: 1
+                      keyHash:
+                        description: >-
+                          KeyHash is the SHA-256 hash of the API key.
+                        type: string
+                        minLength: 64
+                        maxLength: 64
+                        pattern: ^[a-f0-9]{64}$
+                      createdAt:
+                        description: CreatedAt is when the key was created.
+                        type: string
+                        format: date-time
+                quota:
+                  description: >-
+                    TenantQuota defines resource limits for a tenant.
+                  type: object
+                  required:
+                    - maxModels
+                    - maxGPUs
+                    - maxVRAMMB
+                    - maxRequestsPerMinute
+                  properties:
+                    maxModels:
+                      description: >-
+                        MaxModels is the maximum number of ModelDeployments.
+                      type: integer
+                      format: int32
+                      minimum: 1
+                    maxGPUs:
+                      description: >-
+                        MaxGPUs is the maximum number of concurrent GPUs.
+                      type: integer
+                      format: int32
+                      minimum: 1
+                    maxVRAMMB:
+                      description: >-
+                        MaxVRAMMB is the maximum total VRAM in megabytes.
+                      type: integer
+                      format: int32
+                      minimum: 0
+                    maxRequestsPerMinute:
+                      description: >-
+                        MaxRequestsPerMinute is the rate limit.
+                      type: integer
+                      format: int32
+                      minimum: 1
+                    budgetCentsPerMonth:
+                      description: >-
+                        BudgetCentsPerMonth is the monthly spending cap in
+                        cents.
+                      type: integer
+                      format: int64
+                      minimum: 0
+            status:
+              description: >-
+                TenantStatus defines the observed state of a Tenant.
+              type: object
+              properties:
+                phase:
+                  description: >-
+                    Phase is the tenant lifecycle.
+                  type: string
+                  enum:
+                    - Provisioning
+                    - Active
+                    - Suspended
+                activeModels:
+                  description: >-
+                    ActiveModels is the number of active ModelDeployments.
+                  type: integer
+                  format: int32
+                gpusInUse:
+                  description: >-
+                    GPUsInUse is the current GPU count.
+                  type: integer
+                  format: int32
+                vramUsedMB:
+                  description: >-
+                    VRAMUsedMB is the current total VRAM consumption.
+                  type: integer
+                  format: int32
+                currentSpendCents:
+                  description: >-
+                    CurrentSpendCents is the current month's spend in cents.
+                  type: integer
+                  format: int64
+                conditions:
+                  description: >-
+                    Conditions represent the latest available observations.
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                      - reason
+                      - message
+                    properties:
+                      type:
+                        description: Type of condition.
+                        type: string
+                        maxLength: 316
+                      status:
+                        description: Status of the condition.
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      observedGeneration:
+                        description: >-
+                          ObservedGeneration represents the generation that
+                          the condition was set based upon.
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      lastTransitionTime:
+                        description: >-
+                          LastTransitionTime is the last time the condition
+                          transitioned from one status to another.
+                        type: string
+                        format: date-time
+                      reason:
+                        description: >-
+                          Reason contains a programmatic identifier indicating
+                          the reason for the condition's last transition.
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      message:
+                        description: >-
+                          Message is a human readable message indicating
+                          details about the transition.
+                        type: string
+                        maxLength: 32768

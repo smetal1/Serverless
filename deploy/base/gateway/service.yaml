@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: podstack-gateway
+  namespace: podstack-system
+  labels:
+    app.kubernetes.io/name: podstack-gateway
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: gateway
+    podstack.io/component: gateway
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: /metrics
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: podstack-gateway
+    app.kubernetes.io/component: gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+  sessionAffinity: None
+  externalTrafficPolicy: Local

@@ -1,0 +1,19 @@
+apiVersion: podstack.io/v1
+kind: LoRAAdapter
+metadata:
+  name: sentiment-customer-a
+  namespace: podstack-system
+  labels:
+    app.kubernetes.io/name: sentiment-customer-a
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: lora-adapter
+    podstack.io/component: lora-adapter
+    podstack.io/base-model: llama-3-1-8b-instruct
+    podstack.io/tenant: acme-corp
+spec:
+  adapterName: sentiment-analysis-v1
+  baseModelRef: llama-3-1-8b-instruct
+  source: huggingface
+  sourcePath: acme-corp/llama-3-1-8b-sentiment-lora
+  tenantRef: acme-corp
+  autoLoad: true

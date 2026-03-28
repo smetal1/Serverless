@@ -1,0 +1,34 @@
+apiVersion: podstack.io/v1
+kind: ModelDeployment
+metadata:
+  name: whisper-large-v3
+  namespace: podstack-system
+  labels:
+    app.kubernetes.io/name: whisper-large-v3
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: model
+    podstack.io/component: worker
+    podstack.io/model: whisper-large-v3
+    podstack.io/runtime: triton
+    podstack.io/model-type: asr
+spec:
+  modelName: openai/whisper-large-v3
+  modelSource: huggingface
+  modelType: asr
+  runtime: triton
+  runtimeArgs:
+    - --model-repository=/mnt/models/triton-repos/whisper-large-v3
+    - --backend-config=python,shm-default-byte-size=536870912
+  gpu:
+    count: 1
+    memoryMB: 8000
+    type: l40s
+  scaling:
+    minReplicas: 0
+    maxReplicas: 8
+    idleTimeoutSeconds: 120
+    standbyPool: 2
+  snapshot:
+    enabled: true
+    autoSnapshot: true
+    warmupRequests: 5

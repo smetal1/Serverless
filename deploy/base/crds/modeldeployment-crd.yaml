@@ -1,0 +1,344 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: modeldeployments.podstack.io
+  labels:
+    app.kubernetes.io/name: podstack
+    app.kubernetes.io/part-of: podstack-inference-os
+    podstack.io/component: crd
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+spec:
+  group: podstack.io
+  names:
+    kind: ModelDeployment
+    listKind: ModelDeploymentList
+    plural: modeldeployments
+    singular: modeldeployment
+    shortNames:
+      - mdep
+      - mdeps
+    categories:
+      - podstack
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Model
+          type: string
+          jsonPath: .spec.modelName
+        - name: Runtime
+          type: string
+          jsonPath: .spec.runtime
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Ready
+          type: integer
+          jsonPath: .status.readyReplicas
+        - name: Standby
+          type: integer
+          jsonPath: .status.standbyReplicas
+        - name: VRAM(MB)
+          type: integer
+          jsonPath: .status.vramUsedMB
+        - name: ColdStart(ms)
+          type: integer
+          jsonPath: .status.coldStartMs
+      schema:
+        openAPIV3Schema:
+          description: >-
+            ModelDeployment is the Schema for the modeldeployments API.
+            It represents a model inference endpoint managed by the Podstack Inference OS.
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              description: >-
+                APIVersion defines the versioned schema of this representation
+                of an object.
+              type: string
+            kind:
+              description: >-
+                Kind is a string value representing the REST resource this
+                object represents.
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: ModelDeploymentSpec defines the desired state of a ModelDeployment.
+              type: object
+              required:
+                - modelName
+                - modelSource
+                - modelType
+                - runtime
+                - gpu
+                - scaling
+                - snapshot
+              properties:
+                modelName:
+                  description: >-
+                    ModelName is the model identifier: HuggingFace ID, NFS path,
+                    or OCI image.
+                  type: string
+                  minLength: 1
+                modelSource:
+                  description: >-
+                    ModelSource specifies where to fetch the model from.
+                  type: string
+                  enum:
+                    - huggingface
+                    - nfs
+                    - s3
+                    - oci
+                modelType:
+                  description: >-
+                    ModelType classifies the model workload type.
+                  type: string
+                  enum:
+                    - llm
+                    - diffusion
+                    - tts
+                    - asr
+                    - vision
+                    - custom
+                image:
+                  description: >-
+                    Image is the container image for generic runtime deployments.
+                  type: string
+                runtime:
+                  description: >-
+                    Runtime selects the inference backend.
+                  type: string
+                  enum:
+                    - vllm
+                    - triton
+                    - generic
+                runtimeArgs:
+                  description: >-
+                    RuntimeArgs are additional arguments passed to the runtime.
+                  type: array
+                  items:
+                    type: string
+                gpu:
+                  description: GPUSpec defines GPU resource requirements.
+                  type: object
+                  required:
+                    - count
+                  properties:
+                    count:
+                      description: Count is the number of GPUs required.
+                      type: integer
+                      format: int32
+                      minimum: 0
+                    memoryMB:
+                      description: >-
+                        MemoryMB is the VRAM limit in megabytes (for fractional
+                        GPU via HAMi).
+                      type: integer
+                      format: int32
+                      minimum: 0
+                    coresPercent:
+                      description: >-
+                        CoresPercent is the percentage of GPU cores to allocate.
+                      type: integer
+                      format: int32
+                      minimum: 0
+                      maximum: 100
+                    type:
+                      description: >-
+                        Type specifies the GPU model: l40s, a100, h100, etc.
+                      type: string
+                scaling:
+                  description: ScalingSpec defines autoscaling behavior.
+                  type: object
+                  required:
+                    - minReplicas
+                    - maxReplicas
+                    - idleTimeoutSeconds
+                    - standbyPool
+                  properties:
+                    minReplicas:
+                      description: >-
+                        MinReplicas is the minimum number of replicas.
+                        0 enables scale-to-zero.
+                      type: integer
+                      format: int32
+                      minimum: 0
+                    maxReplicas:
+                      description: MaxReplicas is the maximum number of replicas.
+                      type: integer
+                      format: int32
+                      minimum: 1
+                    idleTimeoutSeconds:
+                      description: >-
+                        IdleTimeoutSeconds is how long to wait with no requests
+                        before transitioning to Idle.
+                      type: integer
+                      format: int32
+                      minimum: 0
+                    standbyPool:
+                      description: >-
+                        StandbyPool is the number of pre-warmed standby
+                        containers (CPU only, 0 GPU).
+                      type: integer
+                      format: int32
+                      minimum: 0
+                snapshot:
+                  description: ModelSnapshotSpec configures CUDA snapshot behavior.
+                  type: object
+                  required:
+                    - enabled
+                  properties:
+                    enabled:
+                      description: >-
+                        Enabled turns on CUDA snapshot-based cold start
+                        optimization.
+                      type: boolean
+                    autoSnapshot:
+                      description: >-
+                        AutoSnapshot automatically creates a snapshot after
+                        the first model load.
+                      type: boolean
+                    warmupRequests:
+                      description: >-
+                        WarmupRequests is the number of inference requests to
+                        run before snapshotting.
+                      type: integer
+                      format: int32
+                      minimum: 0
+                lora:
+                  description: >-
+                    LoRAMuxSpec configures LoRA adapter multiplexing on a base
+                    model (LLMs only).
+                  type: object
+                  properties:
+                    maxAdapters:
+                      description: >-
+                        MaxAdapters is the maximum number of LoRA adapters
+                        to keep loaded.
+                      type: integer
+                      format: int32
+                      minimum: 1
+                    adapterRefs:
+                      description: >-
+                        AdapterRefs lists LoRAAdapter CRs to load on this
+                        base model.
+                      type: array
+                      items:
+                        type: string
+                tenantRef:
+                  description: TenantRef references the owning Tenant CR.
+                  type: string
+            status:
+              description: >-
+                ModelDeploymentStatus defines the observed state of a
+                ModelDeployment.
+              type: object
+              properties:
+                phase:
+                  description: >-
+                    Phase is the current lifecycle phase.
+                  type: string
+                  enum:
+                    - Pending
+                    - Snapshotting
+                    - Standby
+                    - Booting
+                    - Active
+                    - Idle
+                    - Evicted
+                readyReplicas:
+                  description: >-
+                    ReadyReplicas is the number of replicas actively serving
+                    with GPU.
+                  type: integer
+                  format: int32
+                standbyReplicas:
+                  description: >-
+                    StandbyReplicas is the number of pre-warmed replicas
+                    (CPU only).
+                  type: integer
+                  format: int32
+                endpoint:
+                  description: >-
+                    Endpoint is the internal service URL for this model.
+                  type: string
+                snapshotRef:
+                  description: >-
+                    SnapshotRef references the Snapshot CR for this model.
+                  type: string
+                vramUsedMB:
+                  description: >-
+                    VRAMUsedMB is the current VRAM consumption in megabytes.
+                  type: integer
+                  format: int32
+                lastRequestAt:
+                  description: >-
+                    LastRequestAt is the timestamp of the last inference request.
+                  type: string
+                  format: date-time
+                coldStartMs:
+                  description: >-
+                    ColdStartMs is the last measured cold start duration in
+                    milliseconds.
+                  type: integer
+                  format: int64
+                conditions:
+                  description: >-
+                    Conditions represent the latest available observations of
+                    the deployment's state.
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                      - reason
+                      - message
+                    properties:
+                      type:
+                        description: Type of condition.
+                        type: string
+                        maxLength: 316
+                      status:
+                        description: Status of the condition.
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      observedGeneration:
+                        description: >-
+                          ObservedGeneration represents the generation that
+                          the condition was set based upon.
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      lastTransitionTime:
+                        description: >-
+                          LastTransitionTime is the last time the condition
+                          transitioned from one status to another.
+                        type: string
+                        format: date-time
+                      reason:
+                        description: >-
+                          Reason contains a programmatic identifier indicating
+                          the reason for the condition's last transition.
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      message:
+                        description: >-
+                          Message is a human readable message indicating
+                          details about the transition.
+                        type: string
+                        maxLength: 32768

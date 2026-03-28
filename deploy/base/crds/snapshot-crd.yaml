@@ -1,0 +1,198 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: snapshots.podstack.io
+  labels:
+    app.kubernetes.io/name: podstack
+    app.kubernetes.io/part-of: podstack-inference-os
+    podstack.io/component: crd
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+spec:
+  group: podstack.io
+  names:
+    kind: Snapshot
+    listKind: SnapshotList
+    plural: snapshots
+    singular: snapshot
+    shortNames:
+      - snap
+      - snaps
+    categories:
+      - podstack
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Model
+          type: string
+          jsonPath: .spec.modelDeploymentRef
+        - name: GPU
+          type: string
+          jsonPath: .spec.gpuType
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Size
+          type: integer
+          jsonPath: .spec.sizeBytes
+        - name: RestoreTime(ms)
+          type: integer
+          jsonPath: .status.restoreTimeMs
+        - name: Verified
+          type: boolean
+          jsonPath: .status.verified
+      schema:
+        openAPIV3Schema:
+          description: >-
+            Snapshot is the Schema for the snapshots API. It represents a CUDA
+            checkpoint of a model's GPU state for sub-second restore.
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              description: >-
+                APIVersion defines the versioned schema of this representation
+                of an object.
+              type: string
+            kind:
+              description: >-
+                Kind is a string value representing the REST resource this
+                object represents.
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: SnapshotSpec defines the desired state of a CUDA snapshot.
+              type: object
+              required:
+                - modelDeploymentRef
+                - storagePath
+                - gpuType
+                - cudaVersion
+                - driverVersion
+                - sizeBytes
+              properties:
+                modelDeploymentRef:
+                  description: >-
+                    ModelDeploymentRef is the name of the ModelDeployment this
+                    snapshot belongs to.
+                  type: string
+                  minLength: 1
+                storagePath:
+                  description: >-
+                    StoragePath is the NFS/NVMe path to the snapshot archive.
+                  type: string
+                  minLength: 1
+                gpuType:
+                  description: >-
+                    GPUType is the GPU model this snapshot was captured on.
+                    Snapshots must be restored on the same GPU type.
+                  type: string
+                  minLength: 1
+                cudaVersion:
+                  description: >-
+                    CUDAVersion is the CUDA toolkit version used during capture.
+                  type: string
+                  minLength: 1
+                driverVersion:
+                  description: >-
+                    DriverVersion is the NVIDIA driver version used during
+                    capture.
+                  type: string
+                  minLength: 1
+                sizeBytes:
+                  description: >-
+                    SizeBytes is the total size of the snapshot archive.
+                  type: integer
+                  format: int64
+                  minimum: 0
+            status:
+              description: SnapshotStatus defines the observed state of a Snapshot.
+              type: object
+              properties:
+                phase:
+                  description: >-
+                    Phase is the current snapshot lifecycle.
+                  type: string
+                  enum:
+                    - Creating
+                    - Ready
+                    - Restoring
+                    - Failed
+                createdAt:
+                  description: >-
+                    CreatedAt is the timestamp when the snapshot was created.
+                  type: string
+                  format: date-time
+                restoreTimeMs:
+                  description: >-
+                    RestoreTimeMs is the last measured restore duration in
+                    milliseconds.
+                  type: integer
+                  format: int64
+                verified:
+                  description: >-
+                    Verified indicates whether an inference test passed after
+                    restore.
+                  type: boolean
+                message:
+                  description: >-
+                    Message provides additional status information.
+                  type: string
+                conditions:
+                  description: >-
+                    Conditions represent the latest available observations.
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                      - reason
+                      - message
+                    properties:
+                      type:
+                        description: Type of condition.
+                        type: string
+                        maxLength: 316
+                      status:
+                        description: Status of the condition.
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      observedGeneration:
+                        description: >-
+                          ObservedGeneration represents the generation that
+                          the condition was set based upon.
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      lastTransitionTime:
+                        description: >-
+                          LastTransitionTime is the last time the condition
+                          transitioned from one status to another.
+                        type: string
+                        format: date-time
+                      reason:
+                        description: >-
+                          Reason contains a programmatic identifier indicating
+                          the reason for the condition's last transition.
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      message:
+                        description: >-
+                          Message is a human readable message indicating
+                          details about the transition.
+                        type: string
+                        maxLength: 32768
