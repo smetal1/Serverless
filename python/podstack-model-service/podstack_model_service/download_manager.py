@@ -9,6 +9,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+import os
+
+# Disable hf_xet transfer - it stalls on NFS mounts. Use classic HTTP instead.
+os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
+
 from huggingface_hub import snapshot_download, HfApi
 
 from .storage import Storage
