@@ -172,18 +172,14 @@ class DownloadManager:
 
 
 def _make_progress_class(task: DownloadTask):
-    """Create a tqdm-compatible class that updates our DownloadTask progress."""
+    """Create a tqdm subclass that intercepts progress updates into our DownloadTask."""
 
-    _lock = threading.Lock()
+    from tqdm import tqdm as _tqdm_base
 
-    class _ProgressTracker:
-        _lock = threading.Lock()
-
+    class _ProgressTracker(_tqdm_base):
         def __init__(self, *args, **kwargs):
-            self.total = kwargs.get("total", 0)
-            self.desc = kwargs.get("desc", "")
-            self.n = 0
-            self.disable = kwargs.get("disable", False)
+            kwargs["disable"] = True  # suppress all terminal output
+            super().__init__(*args, **kwargs)
             self._task = task
 
             if self.total and self.desc:
@@ -193,77 +189,23 @@ def _make_progress_class(task: DownloadTask):
                 )
                 self._task._file_progress[self.desc] = fp
 
-        @classmethod
-        def get_lock(cls):
-            return cls._lock
-
         def update(self, n=1):
-            self.n += n
+            super().update(n)
             if self.desc and self.desc in self._task._file_progress:
                 fp = self._task._file_progress[self.desc]
                 fp.downloaded_bytes += n
 
-            # Aggregate progress from all file trackers
             total_downloaded = sum(
                 fp.downloaded_bytes for fp in self._task._file_progress.values()
             )
             self._task.downloaded_bytes = total_downloaded
 
         def close(self):
+            super().close()
             if self.desc and self.desc in self._task._file_progress:
                 self._task.completed_files = sum(
                     1 for fp in self._task._file_progress.values()
                     if fp.downloaded_bytes >= fp.total_bytes
                 )
-
-        def set_postfix_str(self, *args, **kwargs):
-            pass
-
-        def set_postfix(self, *args, **kwargs):
-            pass
-
-        def set_description(self, desc=None, refresh=True):
-            self.desc = desc or self.desc
-
-        def set_description_str(self, desc=None, refresh=True):
-            self.desc = desc or self.desc
-
-        def display(self, *args, **kwargs):
-            pass
-
-        def refresh(self):
-            pass
-
-        def clear(self):
-            pass
-
-        def reset(self, total=None):
-            if total is not None:
-                self.total = total
-            self.n = 0
-
-        def unpause(self):
-            pass
-
-        def moveto(self, *args, **kwargs):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            self.close()
-
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            raise StopIteration
-
-        def __len__(self):
-            return 0
-
-        def __bool__(self):
-            return True
 
     return _ProgressTracker
