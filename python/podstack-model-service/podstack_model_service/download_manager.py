@@ -1,15 +1,14 @@
-"""Background download manager with real-time progress tracking."""
+"""Background download manager with disk-based progress tracking."""
 
-import asyncio
 import logging
+import os
 import time
 import threading
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any
-
-import os
 
 # Disable hf_xet transfer - it stalls writing large files to NFS mounts.
 # Force classic HTTP downloads instead.
@@ -32,16 +31,10 @@ class DownloadStatus(str, Enum):
 
 
 @dataclass
-class FileProgress:
-    filename: str
-    downloaded_bytes: int = 0
-    total_bytes: int = 0
-
-
-@dataclass
 class DownloadTask:
     id: str
     model_id: str
+    local_dir: str = ""
     status: DownloadStatus = DownloadStatus.PENDING
     started_at: float = 0.0
     completed_at: float = 0.0
@@ -51,7 +44,6 @@ class DownloadTask:
     completed_files: int = 0
     error: str = ""
     _cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
-    _file_progress: dict[str, FileProgress] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         elapsed = 0.0
@@ -72,6 +64,20 @@ class DownloadTask:
         }
 
 
+def _scan_dir_size(path: str) -> tuple[int, int]:
+    """Return (total_bytes, file_count) for all files under path."""
+    total = 0
+    count = 0
+    try:
+        for f in Path(path).rglob("*"):
+            if f.is_file():
+                total += f.stat().st_size
+                count += 1
+    except OSError:
+        pass
+    return total, count
+
+
 class DownloadManager:
     def __init__(self, storage: Storage):
         self.storage = storage
@@ -80,7 +86,6 @@ class DownloadManager:
 
     def start_download(self, model_id: str) -> DownloadTask:
         """Start a background download for a HuggingFace model."""
-        # Check if already downloading this model
         for task in self._tasks.values():
             if task.model_id == model_id and task.status in (
                 DownloadStatus.PENDING, DownloadStatus.DOWNLOADING
@@ -90,6 +95,7 @@ class DownloadManager:
         task = DownloadTask(
             id=str(uuid.uuid4())[:8],
             model_id=model_id,
+            local_dir=str(self.storage.model_path(model_id)),
         )
         self._tasks[task.id] = task
 
@@ -119,6 +125,14 @@ class DownloadManager:
         task.completed_at = time.time()
         return True
 
+    def _monitor_progress(self, task: DownloadTask):
+        """Poll disk usage every second to update progress."""
+        while task.status == DownloadStatus.DOWNLOADING:
+            size, count = _scan_dir_size(task.local_dir)
+            task.downloaded_bytes = size
+            task.completed_files = count
+            time.sleep(1)
+
     def _run_download(self, task: DownloadTask):
         """Execute the download in a background thread."""
         try:
@@ -141,15 +155,18 @@ class DownloadManager:
             if task._cancel_event.is_set():
                 return
 
-            local_dir = str(self.storage.model_path(task.model_id))
+            # Start disk monitor thread
+            monitor = threading.Thread(
+                target=self._monitor_progress,
+                args=(task,),
+                daemon=True,
+            )
+            monitor.start()
 
-            # Use huggingface_hub's snapshot_download with a progress callback
-            # The tqdm_class parameter lets us intercept progress
             snapshot_download(
                 task.model_id,
-                local_dir=local_dir,
+                local_dir=task.local_dir,
                 repo_type="model",
-                tqdm_class=_make_progress_class(task),
             )
 
             if task._cancel_event.is_set():
@@ -159,12 +176,11 @@ class DownloadManager:
             task.completed_at = time.time()
 
             # Final size from disk
-            model_info = self.storage.get_model(task.model_id)
-            if model_info:
-                task.downloaded_bytes = model_info.size_bytes
-                task.total_bytes = model_info.size_bytes
-                task.completed_files = model_info.file_count
-                task.total_files = model_info.file_count
+            size, count = _scan_dir_size(task.local_dir)
+            task.downloaded_bytes = size
+            task.completed_files = count
+            task.total_bytes = size
+            task.total_files = count
 
             logger.info(f"Download completed: {task.model_id}")
 
@@ -176,48 +192,3 @@ class DownloadManager:
                 task.error = str(e)
                 logger.error(f"Download failed for {task.model_id}: {e}")
             task.completed_at = time.time()
-
-
-def _make_progress_class(task: DownloadTask):
-    """Create a tqdm subclass that intercepts progress updates into our DownloadTask."""
-
-    from tqdm import tqdm as _tqdm_base
-
-    class _ProgressTracker(_tqdm_base):
-        def __init__(self, *args, **kwargs):
-            # Set our attrs before super().__init__ since tqdm may call
-            # close()/update() during init.
-            self._task = task
-            self._desc_key = kwargs.get("desc", "")
-            kwargs["disable"] = True  # suppress all terminal output
-            super().__init__(*args, **kwargs)
-
-            if self.total and self._desc_key:
-                fp = FileProgress(
-                    filename=self._desc_key,
-                    total_bytes=self.total,
-                )
-                self._task._file_progress[self._desc_key] = fp
-
-        def update(self, n=1):
-            super().update(n)
-            desc = getattr(self, "_desc_key", "")
-            if desc and desc in self._task._file_progress:
-                fp = self._task._file_progress[desc]
-                fp.downloaded_bytes += n
-
-            total_downloaded = sum(
-                fp.downloaded_bytes for fp in self._task._file_progress.values()
-            )
-            self._task.downloaded_bytes = total_downloaded
-
-        def close(self):
-            super().close()
-            desc = getattr(self, "_desc_key", "")
-            if desc and desc in self._task._file_progress:
-                self._task.completed_files = sum(
-                    1 for fp in self._task._file_progress.values()
-                    if fp.downloaded_bytes >= fp.total_bytes
-                )
-
-    return _ProgressTracker
