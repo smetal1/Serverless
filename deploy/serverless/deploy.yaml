@@ -610,3 +610,165 @@ spec:
           port: 4000
   tls:
     secretName: wildcard-cloud-podstack-tls
+---
+# =============================================================================
+# STORAGE: NFS PV/PVC for Model Downloads (TrueNAS)
+# =============================================================================
+# Prereq: Create dataset on TrueNAS at /mnt/tank/podstack/serverless-models
+#         with NFS share enabled (maproot=root, RW access)
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: podstack-serverless-models
+  labels:
+    app.kubernetes.io/name: podstack
+    app.kubernetes.io/part-of: podstack-inference-os
+    podstack.io/storage-type: nfs-models
+spec:
+  capacity:
+    storage: 2Ti
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions:
+    - nfsvers=4.1
+    - hard
+    - nointr
+  nfs:
+    path: /mnt/tank/podstack/serverless-models
+    server: 192.168.29.5
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: podstack-models
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack
+    app.kubernetes.io/part-of: podstack-inference-os
+    podstack.io/storage-type: nfs-models
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: podstack-serverless-models
+  resources:
+    requests:
+      storage: 2Ti
+---
+# =============================================================================
+# Model Download Service
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podstack-model-service
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-model-service
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: model-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: podstack-model-service
+      app.kubernetes.io/component: model-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: podstack-model-service
+        app.kubernetes.io/part-of: podstack-inference-os
+        app.kubernetes.io/component: model-service
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: model-service
+          image: saurav7055/model-service:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: NFS_BASE_PATH
+              value: /models
+            - name: PORT
+              value: "8000"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /api/models
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/models
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: models
+              mountPath: /models
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: podstack-models
+      nodeSelector:
+        kubernetes.io/os: linux
+---
+# Model Service - ClusterIP Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: podstack-model-service
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-model-service
+    app.kubernetes.io/part-of: podstack-inference-os
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: podstack-model-service
+    app.kubernetes.io/component: model-service
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+---
+# Model Service IngressRoute (Traefik)
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: podstack-model-service
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: podstack-model-service
+    app.kubernetes.io/part-of: podstack-inference-os
+spec:
+  entryPoints:
+    - web
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`models.cloud.podstack.ai`)
+      services:
+        - name: podstack-model-service
+          port: 8000
+  tls:
+    secretName: wildcard-cloud-podstack-tls

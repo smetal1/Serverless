@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "podstack-model-service"
+version = "0.1.0"
+description = "Podstack model download service - download HuggingFace models to NFS storage"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn>=0.27.0",
+    "huggingface_hub>=0.20.0",
+    "sse-starlette>=1.8.0",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+podstack-model-service = "podstack_model_service.main:run"

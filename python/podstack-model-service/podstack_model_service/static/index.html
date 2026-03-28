@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Podstack Model Service</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+        .progress-bar { transition: width 0.3s ease; }
+    </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+    <div class="max-w-4xl mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="mb-8">
+            <h1 class="text-2xl font-bold text-white">Podstack Model Service</h1>
+            <p class="text-gray-400 mt-1">Download HuggingFace models to NFS storage</p>
+        </div>
+
+        <!-- Download Form -->
+        <div class="bg-gray-900 rounded-lg border border-gray-800 p-6 mb-8">
+            <h2 class="text-lg font-semibold mb-4">Download Model</h2>
+            <form id="downloadForm" class="flex gap-3">
+                <input
+                    type="text"
+                    id="modelInput"
+                    placeholder="e.g. Qwen/Qwen2.5-8B-Instruct"
+                    class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <button
+                    type="submit"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-2.5 rounded-lg transition-colors"
+                >
+                    Download
+                </button>
+            </form>
+        </div>
+
+        <!-- Active Downloads -->
+        <div class="mb-8">
+            <h2 class="text-lg font-semibold mb-4">Active Downloads</h2>
+            <div id="downloadsList" class="space-y-3">
+                <p class="text-gray-500 text-sm" id="noDownloads">No active downloads</p>
+            </div>
+        </div>
+
+        <!-- Downloaded Models -->
+        <div>
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-lg font-semibold">Downloaded Models</h2>
+                <button
+                    onclick="loadModels()"
+                    class="text-sm text-gray-400 hover:text-white transition-colors"
+                >
+                    Refresh
+                </button>
+            </div>
+            <div id="modelsList" class="space-y-3">
+                <p class="text-gray-500 text-sm" id="noModels">Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = '';
+        let sseConnections = {};
+
+        // --- Downloads ---
+
+        document.getElementById('downloadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const input = document.getElementById('modelInput');
+            const modelId = input.value.trim();
+            if (!modelId) return;
+
+            try {
+                const res = await fetch(`${API}/api/downloads`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model_id: modelId }),
+                });
+                if (!res.ok) {
+                    const err = await res.json();
+                    alert(err.detail || 'Download failed');
+                    return;
+                }
+                const task = await res.json();
+                input.value = '';
+                addDownloadCard(task);
+                connectSSE(task.id);
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        });
+
+        async function loadDownloads() {
+            try {
+                const res = await fetch(`${API}/api/downloads`);
+                const tasks = await res.json();
+                const container = document.getElementById('downloadsList');
+                const noMsg = document.getElementById('noDownloads');
+
+                // Remove placeholder
+                if (tasks.length > 0) noMsg.style.display = 'none';
+                else { noMsg.style.display = ''; return; }
+
+                tasks.forEach(task => {
+                    if (!document.getElementById(`dl-${task.id}`)) {
+                        addDownloadCard(task);
+                        if (task.status === 'pending' || task.status === 'downloading') {
+                            connectSSE(task.id);
+                        }
+                    }
+                });
+            } catch (err) {
+                console.error('Failed to load downloads:', err);
+            }
+        }
+
+        function addDownloadCard(task) {
+            document.getElementById('noDownloads').style.display = 'none';
+
+            const card = document.createElement('div');
+            card.id = `dl-${task.id}`;
+            card.className = 'bg-gray-900 rounded-lg border border-gray-800 p-4';
+            card.innerHTML = renderDownloadCard(task);
+            document.getElementById('downloadsList').prepend(card);
+        }
+
+        function renderDownloadCard(task) {
+            const pct = task.total_bytes > 0
+                ? Math.round((task.downloaded_bytes / task.total_bytes) * 100)
+                : 0;
+
+            const statusColors = {
+                pending: 'text-yellow-400',
+                downloading: 'text-blue-400',
+                completed: 'text-green-400',
+                failed: 'text-red-400',
+                cancelled: 'text-gray-400',
+            };
+
+            const statusColor = statusColors[task.status] || 'text-gray-400';
+            const isActive = task.status === 'pending' || task.status === 'downloading';
+
+            return `
+                <div class="flex items-center justify-between mb-2">
+                    <div>
+                        <span class="font-medium text-white">${escapeHtml(task.model_id)}</span>
+                        <span class="ml-2 text-xs ${statusColor} uppercase font-semibold">${task.status}</span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <span class="text-sm text-gray-400">${formatBytes(task.downloaded_bytes)} / ${formatBytes(task.total_bytes)}</span>
+                        ${isActive ? `
+                            <button onclick="cancelDownload('${task.id}')" class="text-xs text-red-400 hover:text-red-300 transition-colors">
+                                Cancel
+                            </button>
+                        ` : ''}
+                    </div>
+                </div>
+                <div class="w-full bg-gray-800 rounded-full h-2">
+                    <div class="progress-bar bg-blue-500 h-2 rounded-full ${task.status === 'completed' ? 'bg-green-500' : ''} ${task.status === 'failed' ? 'bg-red-500' : ''}" style="width: ${pct}%"></div>
+                </div>
+                <div class="flex justify-between mt-1.5 text-xs text-gray-500">
+                    <span>${task.completed_files} / ${task.total_files} files</span>
+                    <span>${task.elapsed_seconds > 0 ? formatDuration(task.elapsed_seconds) : ''}</span>
+                </div>
+                ${task.error ? `<p class="mt-2 text-sm text-red-400">${escapeHtml(task.error)}</p>` : ''}
+            `;
+        }
+
+        function connectSSE(taskId) {
+            if (sseConnections[taskId]) return;
+
+            const es = new EventSource(`${API}/api/downloads/${taskId}/progress`);
+            sseConnections[taskId] = es;
+
+            es.addEventListener('progress', (e) => {
+                const task = JSON.parse(e.data);
+                const card = document.getElementById(`dl-${taskId}`);
+                if (card) card.innerHTML = renderDownloadCard(task);
+
+                if (['completed', 'failed', 'cancelled'].includes(task.status)) {
+                    es.close();
+                    delete sseConnections[taskId];
+                    if (task.status === 'completed') loadModels();
+                }
+            });
+
+            es.onerror = () => {
+                es.close();
+                delete sseConnections[taskId];
+            };
+        }
+
+        async function cancelDownload(taskId) {
+            try {
+                await fetch(`${API}/api/downloads/${taskId}`, { method: 'DELETE' });
+            } catch (err) {
+                console.error('Cancel failed:', err);
+            }
+        }
+
+        // --- Models ---
+
+        async function loadModels() {
+            try {
+                const res = await fetch(`${API}/api/models`);
+                const models = await res.json();
+                const container = document.getElementById('modelsList');
+                const noMsg = document.getElementById('noModels');
+
+                if (models.length === 0) {
+                    noMsg.textContent = 'No models downloaded yet';
+                    noMsg.style.display = '';
+                    // Remove old cards
+                    container.querySelectorAll('.model-card').forEach(el => el.remove());
+                    return;
+                }
+
+                noMsg.style.display = 'none';
+
+                // Remove old cards
+                container.querySelectorAll('.model-card').forEach(el => el.remove());
+
+                models.forEach(model => {
+                    const card = document.createElement('div');
+                    card.className = 'model-card bg-gray-900 rounded-lg border border-gray-800 p-4 flex items-center justify-between';
+                    card.innerHTML = `
+                        <div>
+                            <span class="font-medium text-white">${escapeHtml(model.name)}</span>
+                            <div class="text-xs text-gray-500 mt-0.5">${model.size_human} &middot; ${model.file_count} files</div>
+                        </div>
+                        <button
+                            onclick="deleteModel('${escapeHtml(model.name)}')"
+                            class="text-xs text-red-400 hover:text-red-300 transition-colors px-3 py-1.5 rounded border border-red-400/20 hover:border-red-400/40"
+                        >
+                            Delete
+                        </button>
+                    `;
+                    container.appendChild(card);
+                });
+            } catch (err) {
+                console.error('Failed to load models:', err);
+                document.getElementById('noModels').textContent = 'Failed to load models';
+            }
+        }
+
+        async function deleteModel(modelName) {
+            if (!confirm(`Delete ${modelName}? This cannot be undone.`)) return;
+            try {
+                const res = await fetch(`${API}/api/models/${modelName}`, { method: 'DELETE' });
+                if (res.ok) loadModels();
+                else alert('Delete failed');
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        }
+
+        // --- Helpers ---
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(1024));
+            return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+        }
+
+        function formatDuration(seconds) {
+            if (seconds < 60) return `${Math.round(seconds)}s`;
+            const m = Math.floor(seconds / 60);
+            const s = Math.round(seconds % 60);
+            if (m < 60) return `${m}m ${s}s`;
+            const h = Math.floor(m / 60);
+            return `${h}h ${m % 60}m`;
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        // --- Init ---
+        loadDownloads();
+        loadModels();
+    </script>
+</body>
+</html>
