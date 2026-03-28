@@ -11,7 +11,9 @@ from typing import Any
 
 import os
 
-# Disable hf_xet transfer - it stalls on NFS mounts. Use classic HTTP instead.
+# Disable hf_xet transfer - it stalls writing large files to NFS mounts.
+# Force classic HTTP downloads instead.
+os.environ["HF_HUB_DISABLE_XET"] = "1"
 os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
 from huggingface_hub import snapshot_download, HfApi
