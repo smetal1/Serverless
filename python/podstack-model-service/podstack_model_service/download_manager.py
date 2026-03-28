@@ -174,11 +174,16 @@ class DownloadManager:
 def _make_progress_class(task: DownloadTask):
     """Create a tqdm-compatible class that updates our DownloadTask progress."""
 
+    _lock = threading.Lock()
+
     class _ProgressTracker:
+        _lock = threading.Lock()
+
         def __init__(self, *args, **kwargs):
             self.total = kwargs.get("total", 0)
             self.desc = kwargs.get("desc", "")
             self.n = 0
+            self.disable = kwargs.get("disable", False)
             self._task = task
 
             if self.total and self.desc:
@@ -187,6 +192,10 @@ def _make_progress_class(task: DownloadTask):
                     total_bytes=self.total,
                 )
                 self._task._file_progress[self.desc] = fp
+
+        @classmethod
+        def get_lock(cls):
+            return cls._lock
 
         def update(self, n=1):
             self.n += n
@@ -210,11 +219,17 @@ def _make_progress_class(task: DownloadTask):
         def set_postfix_str(self, *args, **kwargs):
             pass
 
+        def set_postfix(self, *args, **kwargs):
+            pass
+
         def set_description(self, desc=None, refresh=True):
             self.desc = desc or self.desc
 
         def set_description_str(self, desc=None, refresh=True):
             self.desc = desc or self.desc
+
+        def display(self, *args, **kwargs):
+            pass
 
         def refresh(self):
             pass
@@ -227,17 +242,28 @@ def _make_progress_class(task: DownloadTask):
                 self.total = total
             self.n = 0
 
+        def unpause(self):
+            pass
+
+        def moveto(self, *args, **kwargs):
+            pass
+
         def __enter__(self):
             return self
 
         def __exit__(self, *args):
             self.close()
 
-        # Support iteration protocol (huggingface_hub may use it)
         def __iter__(self):
             return self
 
         def __next__(self):
             raise StopIteration
+
+        def __len__(self):
+            return 0
+
+        def __bool__(self):
+            return True
 
     return _ProgressTracker
