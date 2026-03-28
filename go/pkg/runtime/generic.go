@@ -40,7 +40,7 @@ func GenericPodTemplate(md *v1.ModelDeployment) *corev1.PodTemplateSpec {
 	}
 
 	// Assemble volumes and mounts.
-	nfsVol, nfsMount := nfsModelVolume(nfsBaseMountPath)
+	nfsVol, nfsMount := nfsModelVolume()
 	shmVol, shmMount := shmVolume()
 
 	volumes := []corev1.Volume{nfsVol, shmVol}

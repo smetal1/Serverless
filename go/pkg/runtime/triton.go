@@ -63,7 +63,7 @@ func TritonPodTemplate(md *v1.ModelDeployment) *corev1.PodTemplateSpec {
 	args = append(args, md.Spec.RuntimeArgs...)
 
 	// Assemble volumes and mounts.
-	nfsVol, nfsMount := nfsModelVolume(tritonModelRepoBase)
+	nfsVol, nfsMount := nfsModelVolume()
 	shmVol, shmMount := shmVolume()
 
 	volumes := []corev1.Volume{nfsVol, shmVol}

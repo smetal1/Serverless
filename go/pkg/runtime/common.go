@@ -34,10 +34,10 @@ const (
 	snapshotVolumeName = "snapshot-store"
 
 	// nfsServer is the default NFS server address.
-	nfsServer = "nfs-server.podstack-system.svc.cluster.local"
+	nfsServer = "192.168.29.5"
 
 	// nfsSharePath is the NFS export path.
-	nfsSharePath = "/exports/models"
+	nfsSharePath = "/mnt/tank/podstack/serverless-models"
 
 	// snapshotAgentImage is the sidecar container image for CUDA snapshot management.
 	snapshotAgentImage = "ghcr.io/podstack/snapshot-agent:latest"
@@ -111,7 +111,9 @@ func gpuResources(md *v1.ModelDeployment) corev1.ResourceRequirements {
 }
 
 // nfsModelVolume returns the NFS volume and volume mount for the model store.
-func nfsModelVolume(subPath string) (corev1.Volume, corev1.VolumeMount) {
+// The entire NFS share is mounted at /models so that all sub-paths
+// (base/, triton/, lora/, snapshots/) are accessible.
+func nfsModelVolume() (corev1.Volume, corev1.VolumeMount) {
 	vol := corev1.Volume{
 		Name: nfsVolumeName,
 		VolumeSource: corev1.VolumeSource{
@@ -124,8 +126,7 @@ func nfsModelVolume(subPath string) (corev1.Volume, corev1.VolumeMount) {
 	}
 	mount := corev1.VolumeMount{
 		Name:      nfsVolumeName,
-		MountPath: subPath,
-		SubPath:   strings.TrimPrefix(subPath, "/"),
+		MountPath: "/models",
 		ReadOnly:  true,
 	}
 	return vol, mount
