@@ -19,7 +19,6 @@ spec:
   runtimeArgs:
     - --max-model-len=8192
     - --dtype=auto
-    - --enforce-eager=false
     - --gpu-memory-utilization=0.90
   gpu:
     count: 1
