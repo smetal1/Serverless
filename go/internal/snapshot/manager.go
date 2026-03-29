@@ -123,18 +123,20 @@ func getContainerID(pod *corev1.Pod) (string, error) {
 
 // CreateSnapshot orchestrates the full snapshot creation flow for a model.
 //
-// It uses the Kubernetes kubelet checkpoint API (which delegates to CRIU on
-// the node via containerd) to capture CPU/memory state. The checkpoint tar is
-// then copied from the node to NFS for persistent storage.
+// It uses direct CRIU dump from a privileged helper pod (bypassing
+// nvidia-container-runtime which doesn't support CRIU checkpointing of GPU
+// containers). cuda-checkpoint locks/unlocks GPU state before/after CRIU.
 //
 // Flow:
 //  1. Create Snapshot CR in Creating phase
-//  2. Call kubelet checkpoint API via K8s API server proxy
-//  3. Copy the checkpoint tar from the node to NFS via a short-lived copy Pod
-//  4. Update the Snapshot CR to Ready
+//  2. Get container's host PID via containerd state
+//  3. cuda-checkpoint --action lock (pause CUDA, release GPU)
+//  4. Direct CRIU dump via privileged helper pod with nsenter
+//  5. cuda-checkpoint --action unlock (resume CUDA)
+//  6. Copy CRIU dump from node to NFS
+//  7. Update the Snapshot CR to Ready
 //
-// If the kubelet checkpoint API is unavailable, falls back to a placeholder
-// snapshot so the pipeline can progress.
+// Falls back to a placeholder snapshot if any step fails.
 func (m *Manager) CreateSnapshot(ctx context.Context, pod *corev1.Pod, md *v1.ModelDeployment) (*v1.Snapshot, error) {
 	modelName := md.Spec.ModelName
 	gpuType := md.Spec.GPU.Type
@@ -192,8 +194,8 @@ func (m *Manager) CreateSnapshot(ctx context.Context, pod *corev1.Pod, md *v1.Mo
 		return nil, fmt.Errorf("failed to create Snapshot CR: %w", err)
 	}
 
-	// Try GPU checkpoint via kubelet API.
-	// Flow: pause CUDA → kubelet CRIU checkpoint → resume CUDA → copy to NFS.
+	// Try direct CRIU checkpoint (bypasses nvidia-container-runtime).
+	// Flow: CUDA lock → direct CRIU dump → CUDA unlock → copy to NFS.
 	if m.clientset != nil {
 		containerID, cidErr := getContainerIDByName(pod, "vllm")
 		if cidErr != nil {
@@ -201,31 +203,32 @@ func (m *Manager) CreateSnapshot(ctx context.Context, pod *corev1.Pod, md *v1.Mo
 		} else if err := m.runCUDAAction(ctx, pod, containerID, "lock"); err != nil {
 			m.log.Error(err, "failed to lock CUDA context, falling back to placeholder")
 		} else {
-			m.log.Info("CUDA context locked, calling kubelet checkpoint")
+			m.log.Info("CUDA context locked, running direct CRIU dump")
 
-			checkpointPath, chkErr := m.kubeletCheckpoint(ctx, pod, "vllm")
+			dumpDir := fmt.Sprintf("/tmp/criu-dump-%s", snapID)
+			dumpErr := m.runCRIUDump(ctx, pod, containerID, dumpDir)
 
-			// Always resume CUDA, even if checkpoint failed.
+			// Always resume CUDA, even if dump failed.
 			if unlockErr := m.runCUDAAction(ctx, pod, containerID, "unlock"); unlockErr != nil {
-				m.log.Error(unlockErr, "failed to unlock CUDA context after checkpoint")
+				m.log.Error(unlockErr, "failed to unlock CUDA context after dump")
 			} else {
 				m.log.Info("CUDA context unlocked")
 			}
 
-			if chkErr != nil {
-				m.log.Error(chkErr, "kubelet checkpoint failed after CUDA lock")
+			if dumpErr != nil {
+				m.log.Error(dumpErr, "direct CRIU dump failed after CUDA lock")
 			} else {
-				m.log.Info("kubelet checkpoint created on node",
-					"checkpointPath", checkpointPath,
+				m.log.Info("CRIU dump completed, copying to NFS",
+					"dumpDir", dumpDir,
 					"node", pod.Spec.NodeName,
 				)
 
-				// Copy the checkpoint tar from the node to NFS.
-				if cpErr := m.copyCheckpointToNFS(ctx, pod.Spec.NodeName, pod.Namespace, checkpointPath, snapID); cpErr != nil {
-					m.log.Error(cpErr, "failed to copy checkpoint to NFS, falling back to placeholder")
+				// Copy the CRIU dump dir from the node to NFS.
+				if cpErr := m.copyCRIUDumpToNFS(ctx, pod.Spec.NodeName, pod.Namespace, dumpDir, snapID); cpErr != nil {
+					m.log.Error(cpErr, "failed to copy CRIU dump to NFS, falling back to placeholder")
 				} else {
 					snapshot.Status.Phase = v1.SnapshotPhaseReady
-					snapshot.Status.Message = fmt.Sprintf("Checkpoint created via kubelet API (node: %s)", pod.Spec.NodeName)
+					snapshot.Status.Message = fmt.Sprintf("CRIU checkpoint created (node: %s)", pod.Spec.NodeName)
 
 					if err := m.createOrUpdateSnapshotCR(ctx, snapshot); err != nil {
 						return nil, fmt.Errorf("failed to update Snapshot CR to Ready: %w", err)
@@ -234,7 +237,7 @@ func (m *Manager) CreateSnapshot(ctx context.Context, pod *corev1.Pod, md *v1.Mo
 						return nil, fmt.Errorf("failed to update Snapshot status to Ready: %w", err)
 					}
 
-					m.log.Info("snapshot creation complete (kubelet checkpoint)",
+					m.log.Info("snapshot creation complete (direct CRIU dump)",
 						"snapshotID", snapID,
 						"crName", crName,
 						"storagePath", storagePath,
@@ -247,7 +250,7 @@ func (m *Manager) CreateSnapshot(ctx context.Context, pod *corev1.Pod, md *v1.Mo
 
 	// Fallback: create a placeholder snapshot so the pipeline can progress.
 	// The standby pod pattern still provides value without a real checkpoint.
-	m.log.Info("creating placeholder snapshot (kubelet checkpoint unavailable or failed)",
+	m.log.Info("creating placeholder snapshot (CRIU checkpoint unavailable or failed)",
 		"snapshotID", snapID,
 		"crName", crName,
 	)
@@ -466,6 +469,11 @@ func (m *Manager) runCUDAAction(ctx context.Context, pod *corev1.Pod, containerI
 	// The script uses nsenter to run cuda-checkpoint in the host's mount
 	// namespace, giving access to all host libraries (glibc, NVIDIA drivers).
 	// This avoids the musl/glibc incompatibility that occurs with busybox.
+	// Note: --timeout is only valid for --action lock.
+	timeoutFlag := ""
+	if action == "lock" {
+		timeoutFlag = "--timeout 30000"
+	}
 	script := fmt.Sprintf(`set -e
 echo "Entering host mount namespace via nsenter..."
 nsenter --target 1 --mount -- bash -c '
@@ -477,11 +485,11 @@ nsenter --target 1 --mount -- bash -c '
   fi
   HOST_PID=$(cat "$INIT_PID_FILE")
   echo "Found host PID: $HOST_PID for container %s"
-  echo "Running: cuda-checkpoint --action %s --pid $HOST_PID"
-  /usr/local/bin/cuda-checkpoint --action %s --pid $HOST_PID --timeout 30000
+  echo "Running: cuda-checkpoint --action %s --pid $HOST_PID %s"
+  /usr/local/bin/cuda-checkpoint --action %s --pid $HOST_PID %s
   echo "cuda-checkpoint %s completed successfully"
 '
-`, containerID, containerID[:12], action, action, action)
+`, containerID, containerID[:12], action, timeoutFlag, action, timeoutFlag, action)
 
 	privileged := true
 	helperPod := &corev1.Pod{
@@ -545,6 +553,245 @@ nsenter --target 1 --mount -- bash -c '
 
 	_ = m.k8sClient.Delete(ctx, helperPod)
 	return fmt.Errorf("CUDA %s helper pod timed out", action)
+}
+
+// runCRIUDump creates a privileged helper Pod on the same node as the target
+// pod to run CRIU dump directly against the vLLM process's host PID. This
+// bypasses nvidia-container-runtime (which doesn't support CRIU for GPU
+// containers) by running criu directly via nsenter in the host namespace.
+//
+// The dump output is written to dumpDir on the host filesystem.
+func (m *Manager) runCRIUDump(ctx context.Context, pod *corev1.Pod, containerID, dumpDir string) error {
+	nodeName := pod.Spec.NodeName
+	if nodeName == "" {
+		return fmt.Errorf("pod %s/%s has no nodeName", pod.Namespace, pod.Name)
+	}
+
+	safePodName := strings.ToLower(strings.NewReplacer("/", "-", "_", "-").Replace(pod.Name))
+	if len(safePodName) > 40 {
+		safePodName = safePodName[:40]
+	}
+	helperName := fmt.Sprintf("criu-dump-%s", safePodName)
+
+	m.log.Info("creating CRIU dump helper pod",
+		"helperPod", helperName,
+		"node", nodeName,
+		"containerID", containerID[:12],
+		"dumpDir", dumpDir,
+	)
+
+	// The script runs CRIU dump directly using nsenter to access the host's
+	// filesystem and process namespace. Key flags:
+	//   --leave-running: don't kill the process after dump
+	//   --shell-job: handle terminal-attached processes
+	//   --tcp-established: checkpoint TCP connections
+	//   --file-locks: checkpoint file locks
+	//   --ext-unix-sk: allow external UNIX sockets
+	//   --external: skip NVIDIA device files (can't be serialized)
+	script := fmt.Sprintf(`set -e
+echo "Starting CRIU dump via nsenter..."
+nsenter --target 1 --mount -- bash -c '
+  set -e
+  INIT_PID_FILE="/run/k3s/containerd/io.containerd.runtime.v2.task/k8s.io/%s/init.pid"
+  if [ ! -f "$INIT_PID_FILE" ]; then
+      echo "ERROR: init.pid not found at $INIT_PID_FILE"
+      exit 1
+  fi
+  HOST_PID=$(cat "$INIT_PID_FILE")
+  echo "Host PID: $HOST_PID for container %s"
+
+  DUMP_DIR="%s"
+  mkdir -p "$DUMP_DIR"
+
+  echo "Running: criu dump -t $HOST_PID -D $DUMP_DIR ..."
+  criu dump \
+    -t $HOST_PID \
+    -D "$DUMP_DIR" \
+    --leave-running \
+    --shell-job \
+    --tcp-established \
+    --file-locks \
+    --ext-unix-sk \
+    -v4 \
+    --log-file dump.log \
+    2>&1 || {
+      echo "CRIU dump failed. Dump log:"
+      cat "$DUMP_DIR/dump.log" 2>/dev/null || echo "(no dump log)"
+      exit 1
+    }
+
+  echo "CRIU dump completed successfully"
+  ls -la "$DUMP_DIR" | head -20
+  echo "Total size: $(du -sh "$DUMP_DIR" | cut -f1)"
+'
+`, containerID, containerID[:12], dumpDir)
+
+	privileged := true
+	helperPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      helperName,
+			Namespace: pod.Namespace,
+			Labels: map[string]string{
+				"podstack.io/role": "criu-dump",
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: nodeName,
+			HostPID:  true,
+			Containers: []corev1.Container{
+				{
+					Name:    "criu-dump",
+					Image:   "ubuntu:22.04",
+					Command: []string{"/bin/bash", "-c", script},
+					SecurityContext: &corev1.SecurityContext{
+						Privileged: &privileged,
+					},
+				},
+			},
+			RestartPolicy: corev1.RestartPolicyNever,
+		},
+	}
+
+	// Clean up any leftover helper pod.
+	helperKey := types.NamespacedName{Name: helperName, Namespace: pod.Namespace}
+	existing := &corev1.Pod{}
+	if err := m.k8sClient.Get(ctx, helperKey, existing); err == nil {
+		_ = m.k8sClient.Delete(ctx, existing)
+		time.Sleep(3 * time.Second)
+	}
+
+	if err := m.k8sClient.Create(ctx, helperPod); err != nil {
+		return fmt.Errorf("failed to create CRIU dump helper pod: %w", err)
+	}
+
+	// Wait for the helper pod to complete (CRIU dump can take a while for large processes).
+	deadline := time.Now().Add(5 * time.Minute)
+	for time.Now().Before(deadline) {
+		fetched := &corev1.Pod{}
+		if err := m.k8sClient.Get(ctx, helperKey, fetched); err != nil {
+			return fmt.Errorf("failed to get CRIU dump helper pod: %w", err)
+		}
+
+		switch fetched.Status.Phase {
+		case corev1.PodSucceeded:
+			m.log.Info("CRIU dump helper pod completed", "pod", helperName)
+			_ = m.k8sClient.Delete(ctx, fetched)
+			return nil
+		case corev1.PodFailed:
+			_ = m.k8sClient.Delete(ctx, fetched)
+			return fmt.Errorf("CRIU dump helper pod failed")
+		}
+
+		time.Sleep(3 * time.Second)
+	}
+
+	_ = m.k8sClient.Delete(ctx, helperPod)
+	return fmt.Errorf("CRIU dump helper pod timed out after 5m")
+}
+
+// copyCRIUDumpToNFS creates a short-lived Pod on the same node to tar and
+// copy the CRIU dump directory from the host to NFS storage.
+func (m *Manager) copyCRIUDumpToNFS(ctx context.Context, nodeName, namespace, dumpDir, snapID string) error {
+	safeName := strings.ToLower(strings.NewReplacer("/", "-", "_", "-").Replace(snapID))
+	if len(safeName) > 40 {
+		safeName = safeName[:40]
+	}
+	podName := fmt.Sprintf("chkpt-copy-%s", safeName)
+
+	m.log.Info("creating CRIU dump copy pod",
+		"podName", podName,
+		"node", nodeName,
+		"source", dumpDir,
+		"destDir", snapID,
+	)
+
+	copyPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"podstack.io/role": "checkpoint-copy",
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: nodeName,
+			Containers: []corev1.Container{
+				{
+					Name:  "copy",
+					Image: "ubuntu:22.04",
+					Command: []string{
+						"/bin/bash", "-c",
+						fmt.Sprintf(`set -e
+mkdir -p /nfs/%s
+echo "Tarring CRIU dump from /host-dump to /nfs/%s/checkpoint.tar"
+tar -cf /nfs/%s/checkpoint.tar -C /host-dump .
+echo "Copy done. Size: $(du -sh /nfs/%s/checkpoint.tar | cut -f1)"
+`, snapID, snapID, snapID, snapID),
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "host-dump", MountPath: "/host-dump", ReadOnly: true},
+						{Name: "nfs-snapshots", MountPath: "/nfs"},
+					},
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: "host-dump",
+					VolumeSource: corev1.VolumeSource{
+						HostPath: &corev1.HostPathVolumeSource{
+							Path: dumpDir,
+						},
+					},
+				},
+				{
+					Name: "nfs-snapshots",
+					VolumeSource: corev1.VolumeSource{
+						NFS: &corev1.NFSVolumeSource{
+							Server: snapshotNFSServer,
+							Path:   snapshotNFSPath,
+						},
+					},
+				},
+			},
+			RestartPolicy: corev1.RestartPolicyNever,
+		},
+	}
+
+	// Delete any leftover copy pod from a previous attempt.
+	existingKey := types.NamespacedName{Name: podName, Namespace: namespace}
+	existingPod := &corev1.Pod{}
+	if err := m.k8sClient.Get(ctx, existingKey, existingPod); err == nil {
+		_ = m.k8sClient.Delete(ctx, existingPod)
+		time.Sleep(2 * time.Second)
+	}
+
+	if err := m.k8sClient.Create(ctx, copyPod); err != nil {
+		return fmt.Errorf("failed to create CRIU dump copy pod: %w", err)
+	}
+
+	// Wait for the copy pod to complete.
+	deadline := time.Now().Add(copyPodTimeout)
+	for time.Now().Before(deadline) {
+		fetchedPod := &corev1.Pod{}
+		if err := m.k8sClient.Get(ctx, existingKey, fetchedPod); err != nil {
+			return fmt.Errorf("failed to get copy pod status: %w", err)
+		}
+
+		switch fetchedPod.Status.Phase {
+		case corev1.PodSucceeded:
+			m.log.Info("CRIU dump copy pod completed successfully", "podName", podName)
+			_ = m.k8sClient.Delete(ctx, fetchedPod)
+			return nil
+		case corev1.PodFailed:
+			_ = m.k8sClient.Delete(ctx, fetchedPod)
+			return fmt.Errorf("CRIU dump copy pod failed (phase: %s)", fetchedPod.Status.Phase)
+		}
+
+		time.Sleep(3 * time.Second)
+	}
+
+	_ = m.k8sClient.Delete(ctx, copyPod)
+	return fmt.Errorf("CRIU dump copy pod timed out after %v", copyPodTimeout)
 }
 
 // RestoreToGPU restores a model from a snapshot:
