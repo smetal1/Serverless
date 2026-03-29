@@ -580,68 +580,52 @@ func (m *Manager) runCRIUDump(ctx context.Context, pod *corev1.Pod, containerID,
 		"dumpDir", dumpDir,
 	)
 
-	// The script runs CRIU dump directly using nsenter to access the host's
-	// filesystem and process namespace.
+	// The script uses `runc checkpoint` instead of `criu dump` directly.
+	// runc properly handles the container's mount namespace, cgroups, and
+	// all the NVIDIA bind mounts that trip up bare CRIU. runc was used to
+	// create the container (nvidia-container-runtime wraps runc) so it
+	// knows the container's full state.
 	//
-	// Key: nvidia-container-runtime injects bind mounts (NVIDIA libs, configs)
-	// into the container. CRIU must be told about the container root and these
-	// external mounts via --root and --external flags.
-	//
-	// The script auto-discovers external bind mounts from /proc/<pid>/mountinfo
-	// and passes them to CRIU so it doesn't try to serialize the backing store.
+	// runc --root <state-dir> checkpoint --image-path <dir> [flags] <container-id>
 	script := fmt.Sprintf(`set -e
-echo "Starting CRIU dump via nsenter..."
+echo "Starting runc checkpoint via nsenter..."
 nsenter --target 1 --mount -- bash -c '
   set -e
-  INIT_PID_FILE="/run/k3s/containerd/io.containerd.runtime.v2.task/k8s.io/%s/init.pid"
-  if [ ! -f "$INIT_PID_FILE" ]; then
-      echo "ERROR: init.pid not found at $INIT_PID_FILE"
-      exit 1
-  fi
-  HOST_PID=$(cat "$INIT_PID_FILE")
-  echo "Host PID: $HOST_PID for container %s"
-
+  CONTAINER_ID="%s"
   DUMP_DIR="%s"
   mkdir -p "$DUMP_DIR"
 
-  # Discover external bind mounts from mountinfo.
-  # These are nvidia-injected mounts that CRIU cannot serialize.
-  # Format: --external mnt[<mount_id>]:<mount_point>
-  EXT_MOUNTS=""
-  while IFS=" " read -r mnt_id parent_id major_minor root mount_point rest; do
-    # Skip the root mount (mount_id is typically 0 or the container root)
-    if [ "$mount_point" = "/" ]; then
-      continue
-    fi
-    EXT_MOUNTS="$EXT_MOUNTS --external mnt[$mnt_id]:$mount_point"
-  done < /proc/$HOST_PID/mountinfo
-  echo "Discovered external mounts for CRIU"
+  RUNC="/var/lib/rancher/rke2/data/v1.33.6-rke2r1-56ce02dfd353/bin/runc"
+  STATE_DIR="/run/containerd/runc/k8s.io"
 
-  echo "Running: criu dump -t $HOST_PID -D $DUMP_DIR --root /proc/$HOST_PID/root ..."
-  criu dump \
-    -t $HOST_PID \
-    -D "$DUMP_DIR" \
-    --root /proc/$HOST_PID/root \
-    --manage-cgroups \
+  # Verify the container exists in runc state
+  if ! "$RUNC" --root "$STATE_DIR" state "$CONTAINER_ID" > /dev/null 2>&1; then
+    echo "ERROR: Container $CONTAINER_ID not found in runc state at $STATE_DIR"
+    "$RUNC" --root "$STATE_DIR" list 2>&1 | head -10
+    exit 1
+  fi
+
+  echo "Container found. Running runc checkpoint..."
+  echo "Command: runc --root $STATE_DIR checkpoint --image-path $DUMP_DIR --leave-running --ext-unix-sk --tcp-established --file-locks $CONTAINER_ID"
+
+  "$RUNC" --root "$STATE_DIR" checkpoint \
+    --image-path "$DUMP_DIR" \
     --leave-running \
-    --shell-job \
+    --ext-unix-sk \
     --tcp-established \
     --file-locks \
-    --ext-unix-sk \
-    $EXT_MOUNTS \
-    -v4 \
-    --log-file dump.log \
-    2>&1 || {
-      echo "CRIU dump failed. Dump log (last 50 lines):"
-      tail -50 "$DUMP_DIR/dump.log" 2>/dev/null || echo "(no dump log)"
+    "$CONTAINER_ID" 2>&1 || {
+      echo "runc checkpoint failed."
+      echo "CRIU dump log (if any):"
+      cat "$DUMP_DIR/dump.log" 2>/dev/null | tail -50 || echo "(no dump log)"
       exit 1
     }
 
-  echo "CRIU dump completed successfully"
+  echo "runc checkpoint completed successfully"
   ls -la "$DUMP_DIR" | head -20
   echo "Total size: $(du -sh "$DUMP_DIR" | cut -f1)"
 '
-`, containerID, containerID[:12], dumpDir)
+`, containerID, dumpDir)
 
 	privileged := true
 	helperPod := &corev1.Pod{
