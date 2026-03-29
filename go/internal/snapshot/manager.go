@@ -463,22 +463,24 @@ func (m *Manager) runCUDAAction(ctx context.Context, pod *corev1.Pod, containerI
 		"containerID", containerID[:12],
 	)
 
-	// The script finds the host PID of the container's init process from
-	// containerd's state file, then calls cuda-checkpoint with LD_LIBRARY_PATH
-	// pointing to the host's NVIDIA libraries.
+	// The script uses nsenter to run cuda-checkpoint in the host's mount
+	// namespace, giving access to all host libraries (glibc, NVIDIA drivers).
+	// This avoids the musl/glibc incompatibility that occurs with busybox.
 	script := fmt.Sprintf(`set -e
-# Read the host PID from containerd's task state
-INIT_PID_FILE="/run/k3s/containerd/io.containerd.runtime.v2.task/k8s.io/%s/init.pid"
-if [ ! -f "$INIT_PID_FILE" ]; then
-    echo "ERROR: init.pid not found at $INIT_PID_FILE"
-    exit 1
-fi
-HOST_PID=$(cat "$INIT_PID_FILE")
-echo "Found host PID: $HOST_PID for container %s"
-echo "Running: cuda-checkpoint --action %s --pid $HOST_PID"
-export LD_LIBRARY_PATH=/host-lib
-/host-bin/cuda-checkpoint --action %s --pid $HOST_PID --timeout 30000
-echo "cuda-checkpoint %s completed successfully"
+echo "Entering host mount namespace via nsenter..."
+nsenter --target 1 --mount -- bash -c '
+  set -e
+  INIT_PID_FILE="/run/k3s/containerd/io.containerd.runtime.v2.task/k8s.io/%s/init.pid"
+  if [ ! -f "$INIT_PID_FILE" ]; then
+      echo "ERROR: init.pid not found at $INIT_PID_FILE"
+      exit 1
+  fi
+  HOST_PID=$(cat "$INIT_PID_FILE")
+  echo "Found host PID: $HOST_PID for container %s"
+  echo "Running: cuda-checkpoint --action %s --pid $HOST_PID"
+  /usr/local/bin/cuda-checkpoint --action %s --pid $HOST_PID --timeout 30000
+  echo "cuda-checkpoint %s completed successfully"
+'
 `, containerID, containerID[:12], action, action, action)
 
 	privileged := true
@@ -496,35 +498,10 @@ echo "cuda-checkpoint %s completed successfully"
 			Containers: []corev1.Container{
 				{
 					Name:    "cuda-action",
-					Image:   "busybox:latest",
-					Command: []string{"/bin/sh", "-c", script},
+					Image:   "ubuntu:22.04",
+					Command: []string{"/bin/bash", "-c", script},
 					SecurityContext: &corev1.SecurityContext{
 						Privileged: &privileged,
-					},
-					VolumeMounts: []corev1.VolumeMount{
-						{Name: "containerd-state", MountPath: "/run/k3s/containerd", ReadOnly: true},
-						{Name: "host-bin", MountPath: "/host-bin", ReadOnly: true},
-						{Name: "host-lib", MountPath: "/host-lib", ReadOnly: true},
-					},
-				},
-			},
-			Volumes: []corev1.Volume{
-				{
-					Name: "containerd-state",
-					VolumeSource: corev1.VolumeSource{
-						HostPath: &corev1.HostPathVolumeSource{Path: "/run/k3s/containerd"},
-					},
-				},
-				{
-					Name: "host-bin",
-					VolumeSource: corev1.VolumeSource{
-						HostPath: &corev1.HostPathVolumeSource{Path: "/usr/local/bin"},
-					},
-				},
-				{
-					Name: "host-lib",
-					VolumeSource: corev1.VolumeSource{
-						HostPath: &corev1.HostPathVolumeSource{Path: "/lib/x86_64-linux-gnu"},
 					},
 				},
 			},

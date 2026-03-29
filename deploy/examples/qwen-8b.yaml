@@ -1,0 +1,39 @@
+apiVersion: podstack.io/v1
+kind: ModelDeployment
+metadata:
+  name: qwen-2-5-8b-instruct
+  namespace: serverless
+  labels:
+    app.kubernetes.io/name: qwen-2-5-8b-instruct
+    app.kubernetes.io/part-of: podstack-inference-os
+    app.kubernetes.io/component: model
+    podstack.io/component: worker
+    podstack.io/model: qwen-2-5-8b-instruct
+    podstack.io/runtime: vllm
+    podstack.io/model-type: llm
+spec:
+  modelName: Qwen/Qwen2.5-8B-Instruct
+  modelSource: huggingface
+  modelType: llm
+  runtime: vllm
+  runtimeArgs:
+    - --max-model-len=8192
+    - --dtype=auto
+    - --enforce-eager=false
+    - --gpu-memory-utilization=0.90
+  gpu:
+    count: 1
+    memoryMB: 24000
+    type: l40s
+  scaling:
+    minReplicas: 0
+    maxReplicas: 2
+    idleTimeoutSeconds: 300
+    standbyPool: 1
+  snapshot:
+    enabled: true
+    autoSnapshot: true
+    warmupRequests: 3
+  lora:
+    maxAdapters: 0
+    adapterRefs: []
