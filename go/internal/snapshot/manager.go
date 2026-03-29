@@ -149,13 +149,22 @@ func (m *Manager) CreateSnapshot(ctx context.Context, pod *corev1.Pod, md *v1.Mo
 		cudaVersion = pod.Annotations["podstack.io/cuda-version"]
 		driverVersion = pod.Annotations["podstack.io/driver-version"]
 	}
+	if cudaVersion == "" {
+		cudaVersion = "unknown"
+	}
+	if driverVersion == "" {
+		driverVersion = "unknown"
+	}
+
+	// Sanitize model name for use as a Kubernetes label value (no slashes).
+	sanitizedModel := strings.ReplaceAll(modelName, "/", "--")
 
 	snapshot := &v1.Snapshot{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      crName,
 			Namespace: pod.Namespace,
 			Labels: map[string]string{
-				"podstack.io/model":    modelName,
+				"podstack.io/model":    sanitizedModel,
 				"podstack.io/gpu-type": gpuType,
 			},
 		},
@@ -482,10 +491,13 @@ func (m *Manager) PrewarmStandby(ctx context.Context, snapshot *v1.Snapshot, md 
 func (m *Manager) SnapshotExists(ctx context.Context, modelName string, gpuType string) (*v1.Snapshot, bool, error) {
 	m.log.V(1).Info("checking for existing snapshot", "model", modelName, "gpuType", gpuType)
 
+	// Sanitize model name to match the label format used during creation.
+	sanitizedModel := strings.ReplaceAll(modelName, "/", "--")
+
 	snapshotList := &v1.SnapshotList{}
 	listOpts := []client.ListOption{
 		client.MatchingLabels{
-			"podstack.io/model":    modelName,
+			"podstack.io/model":    sanitizedModel,
 			"podstack.io/gpu-type": gpuType,
 		},
 	}
