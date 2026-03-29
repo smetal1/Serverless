@@ -43,7 +43,7 @@ const (
 	snapshotNFSPath = "/mnt/tank/podstack/serverless-snapshots"
 
 	// snapshotAgentImage is the sidecar container image for CUDA snapshot management.
-	snapshotAgentImage = "ghcr.io/podstack/snapshot-agent:latest"
+	snapshotAgentImage = "saurav7055/podstack-snapshot-agent:latest"
 )
 
 // modelPath converts a HuggingFace model ID (e.g. "meta-llama/Llama-3-8B")
