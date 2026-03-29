@@ -192,38 +192,55 @@ func (m *Manager) CreateSnapshot(ctx context.Context, pod *corev1.Pod, md *v1.Mo
 		return nil, fmt.Errorf("failed to create Snapshot CR: %w", err)
 	}
 
-	// Try the kubelet checkpoint API (K8s native CRIU via containerd).
+	// Try GPU checkpoint via kubelet API.
+	// Flow: pause CUDA → kubelet CRIU checkpoint → resume CUDA → copy to NFS.
 	if m.clientset != nil {
-		checkpointPath, err := m.kubeletCheckpoint(ctx, pod, "vllm")
-		if err != nil {
-			m.log.Error(err, "kubelet checkpoint API failed, falling back to placeholder")
+		containerID, cidErr := getContainerIDByName(pod, "vllm")
+		if cidErr != nil {
+			m.log.Error(cidErr, "failed to get vllm container ID")
+		} else if err := m.runCUDAAction(ctx, pod, containerID, "lock"); err != nil {
+			m.log.Error(err, "failed to lock CUDA context, falling back to placeholder")
 		} else {
-			m.log.Info("kubelet checkpoint created on node",
-				"checkpointPath", checkpointPath,
-				"node", pod.Spec.NodeName,
-			)
+			m.log.Info("CUDA context locked, calling kubelet checkpoint")
 
-			// Copy the checkpoint tar from the node to NFS.
-			if err := m.copyCheckpointToNFS(ctx, pod.Spec.NodeName, pod.Namespace, checkpointPath, snapID); err != nil {
-				m.log.Error(err, "failed to copy checkpoint to NFS, falling back to placeholder")
+			checkpointPath, chkErr := m.kubeletCheckpoint(ctx, pod, "vllm")
+
+			// Always resume CUDA, even if checkpoint failed.
+			if unlockErr := m.runCUDAAction(ctx, pod, containerID, "unlock"); unlockErr != nil {
+				m.log.Error(unlockErr, "failed to unlock CUDA context after checkpoint")
 			} else {
-				// Real checkpoint created and stored on NFS.
-				snapshot.Status.Phase = v1.SnapshotPhaseReady
-				snapshot.Status.Message = fmt.Sprintf("Checkpoint created via kubelet API (node: %s)", pod.Spec.NodeName)
+				m.log.Info("CUDA context unlocked")
+			}
 
-				if err := m.createOrUpdateSnapshotCR(ctx, snapshot); err != nil {
-					return nil, fmt.Errorf("failed to update Snapshot CR to Ready: %w", err)
-				}
-				if err := m.updateSnapshotStatus(ctx, snapshot); err != nil {
-					return nil, fmt.Errorf("failed to update Snapshot status to Ready: %w", err)
-				}
-
-				m.log.Info("snapshot creation complete (kubelet checkpoint)",
-					"snapshotID", snapID,
-					"crName", crName,
-					"storagePath", storagePath,
+			if chkErr != nil {
+				m.log.Error(chkErr, "kubelet checkpoint failed after CUDA lock")
+			} else {
+				m.log.Info("kubelet checkpoint created on node",
+					"checkpointPath", checkpointPath,
+					"node", pod.Spec.NodeName,
 				)
-				return snapshot, nil
+
+				// Copy the checkpoint tar from the node to NFS.
+				if cpErr := m.copyCheckpointToNFS(ctx, pod.Spec.NodeName, pod.Namespace, checkpointPath, snapID); cpErr != nil {
+					m.log.Error(cpErr, "failed to copy checkpoint to NFS, falling back to placeholder")
+				} else {
+					snapshot.Status.Phase = v1.SnapshotPhaseReady
+					snapshot.Status.Message = fmt.Sprintf("Checkpoint created via kubelet API (node: %s)", pod.Spec.NodeName)
+
+					if err := m.createOrUpdateSnapshotCR(ctx, snapshot); err != nil {
+						return nil, fmt.Errorf("failed to update Snapshot CR to Ready: %w", err)
+					}
+					if err := m.updateSnapshotStatus(ctx, snapshot); err != nil {
+						return nil, fmt.Errorf("failed to update Snapshot status to Ready: %w", err)
+					}
+
+					m.log.Info("snapshot creation complete (kubelet checkpoint)",
+						"snapshotID", snapID,
+						"crName", crName,
+						"storagePath", storagePath,
+					)
+					return snapshot, nil
+				}
 			}
 		}
 	}
@@ -401,6 +418,154 @@ func (m *Manager) copyCheckpointToNFS(ctx context.Context, nodeName, namespace, 
 	// Timeout — clean up and return error.
 	_ = m.k8sClient.Delete(ctx, copyPod)
 	return fmt.Errorf("checkpoint copy pod timed out after %v", copyPodTimeout)
+}
+
+// getContainerIDByName extracts the container ID for a named container in the pod.
+func getContainerIDByName(pod *corev1.Pod, containerName string) (string, error) {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name == containerName {
+			fullID := cs.ContainerID
+			if fullID == "" {
+				return "", fmt.Errorf("container %s in pod %s/%s has empty container ID", containerName, pod.Namespace, pod.Name)
+			}
+			parts := strings.SplitN(fullID, "://", 2)
+			if len(parts) == 2 {
+				return parts[1], nil
+			}
+			return fullID, nil
+		}
+	}
+	return "", fmt.Errorf("container %s not found in pod %s/%s", containerName, pod.Namespace, pod.Name)
+}
+
+// runCUDAAction creates a privileged helper Pod on the same node as the target
+// pod to run cuda-checkpoint with the specified action (lock/unlock) against
+// the vLLM container's host PID.
+//
+// The helper pod uses hostPID to access host processes and reads the container's
+// init PID from containerd's state file.
+func (m *Manager) runCUDAAction(ctx context.Context, pod *corev1.Pod, containerID, action string) error {
+	nodeName := pod.Spec.NodeName
+	if nodeName == "" {
+		return fmt.Errorf("pod %s/%s has no nodeName", pod.Namespace, pod.Name)
+	}
+
+	safePodName := strings.ToLower(strings.NewReplacer("/", "-", "_", "-").Replace(pod.Name))
+	if len(safePodName) > 40 {
+		safePodName = safePodName[:40]
+	}
+	helperName := fmt.Sprintf("cuda-%s-%s", action, safePodName)
+
+	m.log.Info("creating CUDA helper pod",
+		"action", action,
+		"helperPod", helperName,
+		"node", nodeName,
+		"containerID", containerID[:12],
+	)
+
+	// The script finds the host PID of the container's init process from
+	// containerd's state file, then calls cuda-checkpoint.
+	script := fmt.Sprintf(`set -e
+# Read the host PID from containerd's task state
+INIT_PID_FILE="/run/k3s/containerd/io.containerd.runtime.v2.task/k8s.io/%s/init.pid"
+if [ ! -f "$INIT_PID_FILE" ]; then
+    echo "ERROR: init.pid not found at $INIT_PID_FILE"
+    exit 1
+fi
+HOST_PID=$(cat "$INIT_PID_FILE")
+echo "Found host PID: $HOST_PID for container %s"
+echo "Running: cuda-checkpoint --action %s --pid $HOST_PID"
+/host-cuda-checkpoint/cuda-checkpoint --action %s --pid $HOST_PID --timeout 30000
+echo "cuda-checkpoint %s completed successfully"
+`, containerID, containerID[:12], action, action, action)
+
+	privileged := true
+	helperPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      helperName,
+			Namespace: pod.Namespace,
+			Labels: map[string]string{
+				"podstack.io/role": "cuda-helper",
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: nodeName,
+			HostPID:  true,
+			Containers: []corev1.Container{
+				{
+					Name:    "cuda-action",
+					Image:   "busybox:latest",
+					Command: []string{"/bin/sh", "-c", script},
+					SecurityContext: &corev1.SecurityContext{
+						Privileged: &privileged,
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "containerd-state", MountPath: "/run/k3s/containerd", ReadOnly: true},
+						{Name: "host-cuda-checkpoint", MountPath: "/host-cuda-checkpoint", ReadOnly: true},
+						{Name: "dev-nvidia", MountPath: "/dev", ReadOnly: false},
+					},
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: "containerd-state",
+					VolumeSource: corev1.VolumeSource{
+						HostPath: &corev1.HostPathVolumeSource{Path: "/run/k3s/containerd"},
+					},
+				},
+				{
+					Name: "host-cuda-checkpoint",
+					VolumeSource: corev1.VolumeSource{
+						HostPath: &corev1.HostPathVolumeSource{Path: "/usr/local/bin"},
+					},
+				},
+				{
+					Name: "dev-nvidia",
+					VolumeSource: corev1.VolumeSource{
+						HostPath: &corev1.HostPathVolumeSource{Path: "/dev"},
+					},
+				},
+			},
+			RestartPolicy: corev1.RestartPolicyNever,
+		},
+	}
+
+	// Clean up any leftover helper pod.
+	helperKey := types.NamespacedName{Name: helperName, Namespace: pod.Namespace}
+	existing := &corev1.Pod{}
+	if err := m.k8sClient.Get(ctx, helperKey, existing); err == nil {
+		_ = m.k8sClient.Delete(ctx, existing)
+		time.Sleep(3 * time.Second)
+	}
+
+	if err := m.k8sClient.Create(ctx, helperPod); err != nil {
+		return fmt.Errorf("failed to create CUDA %s helper pod: %w", action, err)
+	}
+
+	// Wait for the helper pod to complete.
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		fetched := &corev1.Pod{}
+		if err := m.k8sClient.Get(ctx, helperKey, fetched); err != nil {
+			return fmt.Errorf("failed to get CUDA helper pod: %w", err)
+		}
+
+		switch fetched.Status.Phase {
+		case corev1.PodSucceeded:
+			m.log.Info("CUDA helper pod completed", "action", action, "pod", helperName)
+			_ = m.k8sClient.Delete(ctx, fetched)
+			return nil
+		case corev1.PodFailed:
+			// Try to get logs for debugging.
+			_ = m.k8sClient.Delete(ctx, fetched)
+			return fmt.Errorf("CUDA %s helper pod failed", action)
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	_ = m.k8sClient.Delete(ctx, helperPod)
+	return fmt.Errorf("CUDA %s helper pod timed out", action)
 }
 
 // RestoreToGPU restores a model from a snapshot:

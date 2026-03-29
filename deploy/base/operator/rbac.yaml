@@ -121,4 +121,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: podstack-operator
-    namespace: podstack-system
+    namespace: serverless
