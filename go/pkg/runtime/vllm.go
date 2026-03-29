@@ -166,9 +166,7 @@ func VLLMPodTemplate(md *v1.ModelDeployment) *corev1.PodTemplateSpec {
 			RestartPolicy:                 corev1.RestartPolicyAlways,
 			TerminationGracePeriodSeconds: int64Ptr(30),
 			SecurityContext: &corev1.PodSecurityContext{
-				RunAsNonRoot: boolPtr(true),
-				RunAsUser:    int64Ptr(1000),
-				FSGroup:      int64Ptr(1000),
+				FSGroup: int64Ptr(1000),
 			},
 			Tolerations: []corev1.Toleration{
 				{

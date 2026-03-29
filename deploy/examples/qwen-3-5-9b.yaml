@@ -35,5 +35,5 @@ spec:
     autoSnapshot: false
     warmupRequests: 0
   lora:
-    maxAdapters: 0
+    maxAdapters: 1
     adapterRefs: []
