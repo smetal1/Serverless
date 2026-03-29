@@ -464,7 +464,8 @@ func (m *Manager) runCUDAAction(ctx context.Context, pod *corev1.Pod, containerI
 	)
 
 	// The script finds the host PID of the container's init process from
-	// containerd's state file, then calls cuda-checkpoint.
+	// containerd's state file, then calls cuda-checkpoint with LD_LIBRARY_PATH
+	// pointing to the host's NVIDIA libraries.
 	script := fmt.Sprintf(`set -e
 # Read the host PID from containerd's task state
 INIT_PID_FILE="/run/k3s/containerd/io.containerd.runtime.v2.task/k8s.io/%s/init.pid"
@@ -475,7 +476,8 @@ fi
 HOST_PID=$(cat "$INIT_PID_FILE")
 echo "Found host PID: $HOST_PID for container %s"
 echo "Running: cuda-checkpoint --action %s --pid $HOST_PID"
-/host-cuda-checkpoint/cuda-checkpoint --action %s --pid $HOST_PID --timeout 30000
+export LD_LIBRARY_PATH=/host-lib
+/host-bin/cuda-checkpoint --action %s --pid $HOST_PID --timeout 30000
 echo "cuda-checkpoint %s completed successfully"
 `, containerID, containerID[:12], action, action, action)
 
@@ -501,8 +503,8 @@ echo "cuda-checkpoint %s completed successfully"
 					},
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: "containerd-state", MountPath: "/run/k3s/containerd", ReadOnly: true},
-						{Name: "host-cuda-checkpoint", MountPath: "/host-cuda-checkpoint", ReadOnly: true},
-						{Name: "dev-nvidia", MountPath: "/dev", ReadOnly: false},
+						{Name: "host-bin", MountPath: "/host-bin", ReadOnly: true},
+						{Name: "host-lib", MountPath: "/host-lib", ReadOnly: true},
 					},
 				},
 			},
@@ -514,15 +516,15 @@ echo "cuda-checkpoint %s completed successfully"
 					},
 				},
 				{
-					Name: "host-cuda-checkpoint",
+					Name: "host-bin",
 					VolumeSource: corev1.VolumeSource{
 						HostPath: &corev1.HostPathVolumeSource{Path: "/usr/local/bin"},
 					},
 				},
 				{
-					Name: "dev-nvidia",
+					Name: "host-lib",
 					VolumeSource: corev1.VolumeSource{
-						HostPath: &corev1.HostPathVolumeSource{Path: "/dev"},
+						HostPath: &corev1.HostPathVolumeSource{Path: "/lib/x86_64-linux-gnu"},
 					},
 				},
 			},
