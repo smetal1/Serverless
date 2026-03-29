@@ -38,14 +38,15 @@ func VLLMPodTemplate(md *v1.ModelDeployment) *corev1.PodTemplateSpec {
 	modelDir := fmt.Sprintf("%s/%s", nfsBaseMountPath, modelPath(md.Spec.ModelName))
 
 	// Build vLLM command-line arguments.
+	// Model path is passed as a positional argument (required by vllm serve).
 	args := []string{
-		"--model", modelDir,
+		modelDir,
 		"--host", "0.0.0.0",
 		"--port", strconv.Itoa(int(vllmPort)),
 	}
 
-	// Enable LoRA multiplexing when configured.
-	if md.Spec.LoRA != nil {
+	// Enable LoRA multiplexing when configured with actual adapters.
+	if md.Spec.LoRA != nil && len(md.Spec.LoRA.AdapterRefs) > 0 {
 		args = append(args, "--enable-lora")
 		if md.Spec.LoRA.MaxAdapters > 0 {
 			args = append(args, "--max-loras", strconv.Itoa(int(md.Spec.LoRA.MaxAdapters)))
