@@ -26,6 +26,10 @@ SNAPSHOT_PATH = os.environ.get("PODSTACK_SNAPSHOT_PATH", "/models/snapshots")
 AUTO_SNAPSHOT = os.environ.get("PODSTACK_AUTO_SNAPSHOT", "false").lower() == "true"
 WARMUP_REQUESTS = int(os.environ.get("PODSTACK_WARMUP_REQUESTS", "3"))
 
+# vLLM model ID: vLLM registers the model by its filesystem path, e.g.
+# /models/base/Qwen--Qwen3.5-9B for HuggingFace ID Qwen/Qwen3.5-9B.
+VLLM_MODEL_ID = f"/models/base/{MODEL_NAME.replace('/', '--')}"
+
 # vLLM serves on port 8000 in the same pod
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://localhost:8000")
 VLLM_HEALTH_URL = f"{VLLM_BASE_URL}/health"
@@ -81,11 +85,11 @@ async def wait_for_vllm_ready(timeout: float = 600.0) -> None:
 
 async def send_warmup_requests(count: int) -> None:
     """Send warmup completion requests to vLLM to populate KV cache / CUDA kernels."""
-    logger.info("Sending %d warmup requests to %s", count, VLLM_COMPLETIONS_URL)
+    logger.info("Sending %d warmup requests to %s (model=%s)", count, VLLM_COMPLETIONS_URL, VLLM_MODEL_ID)
     async with httpx.AsyncClient() as client:
         for i in range(count):
             payload = {
-                "model": MODEL_NAME,
+                "model": VLLM_MODEL_ID,
                 "prompt": "Hello, how are you?",
                 "max_tokens": 16,
                 "temperature": 0.0,

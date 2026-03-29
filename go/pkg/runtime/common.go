@@ -182,6 +182,12 @@ func snapshotAgentSidecar(md *v1.ModelDeployment) corev1.Container {
 			{Name: "PODSTACK_SNAPSHOT_PATH", Value: snapshotMountPath},
 			{Name: "PODSTACK_AUTO_SNAPSHOT", Value: fmt.Sprintf("%t", md.Spec.Snapshot.AutoSnapshot)},
 			{Name: "PODSTACK_WARMUP_REQUESTS", Value: fmt.Sprintf("%d", md.Spec.Snapshot.WarmupRequests)},
+			{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+			}},
+			{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
+			}},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: snapshotVolumeName, MountPath: snapshotMountPath},

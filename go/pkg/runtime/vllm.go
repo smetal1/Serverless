@@ -97,11 +97,13 @@ func VLLMPodTemplate(md *v1.ModelDeployment) *corev1.PodTemplateSpec {
 	// Snapshot volume and sidecar.
 	var initContainers []corev1.Container
 	var sidecarContainers []corev1.Container
+	var serviceAccountName string
 	if md.Spec.Snapshot.Enabled {
 		snapVol, snapMount := snapshotVolume()
 		volumes = append(volumes, snapVol)
 		mounts = append(mounts, snapMount)
 		sidecarContainers = append(sidecarContainers, snapshotAgentSidecar(md))
+		serviceAccountName = "podstack-snapshot-agent"
 	}
 
 	// Main vLLM container.
@@ -161,6 +163,7 @@ func VLLMPodTemplate(md *v1.ModelDeployment) *corev1.PodTemplateSpec {
 			Annotations: annotations,
 		},
 		Spec: corev1.PodSpec{
+			ServiceAccountName:            serviceAccountName,
 			InitContainers:                initContainers,
 			Containers:                    containers,
 			Volumes:                       volumes,
