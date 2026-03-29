@@ -679,8 +679,19 @@ nsenter --target 1 --mount -- bash -c '
 			_ = m.k8sClient.Delete(ctx, fetched)
 			return nil
 		case corev1.PodFailed:
-			_ = m.k8sClient.Delete(ctx, fetched)
-			return fmt.Errorf("CRIU dump helper pod failed")
+			// Don't delete failed pod — leave for debugging.
+			// Retrieve container status message for error context.
+			errMsg := "CRIU dump helper pod failed"
+			for _, cs := range fetched.Status.ContainerStatuses {
+				if cs.State.Terminated != nil {
+					errMsg = fmt.Sprintf("CRIU dump helper pod failed: exit=%d reason=%s message=%s",
+						cs.State.Terminated.ExitCode,
+						cs.State.Terminated.Reason,
+						cs.State.Terminated.Message)
+				}
+			}
+			m.log.Error(fmt.Errorf(errMsg), "CRIU dump failed — pod left for log inspection", "pod", helperName)
+			return fmt.Errorf("%s", errMsg)
 		}
 
 		time.Sleep(3 * time.Second)
