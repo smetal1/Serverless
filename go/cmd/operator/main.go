@@ -77,9 +77,10 @@ func main() {
 	}
 
 	if err := (&controller.SnapshotReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Log:    log.WithName("snapshot"),
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		SnapshotManager: snapshotMgr,
+		Log:             log.WithName("snapshot"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Snapshot")
 		os.Exit(1)

@@ -30,9 +30,9 @@ spec:
     idleTimeoutSeconds: 300
     standbyPool: 0
   snapshot:
-    enabled: false
-    autoSnapshot: false
-    warmupRequests: 0
+    enabled: true
+    autoSnapshot: true
+    warmupRequests: 3
   lora:
     maxAdapters: 1
     adapterRefs: []

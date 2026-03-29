@@ -39,6 +39,9 @@ const (
 	// nfsSharePath is the NFS export path.
 	nfsSharePath = "/mnt/tank/podstack/serverless-models"
 
+	// snapshotNFSPath is the NFS export for snapshot storage (separate from models).
+	snapshotNFSPath = "/mnt/tank/podstack/serverless-snapshots"
+
 	// snapshotAgentImage is the sidecar container image for CUDA snapshot management.
 	snapshotAgentImage = "ghcr.io/podstack/snapshot-agent:latest"
 )
@@ -157,7 +160,7 @@ func snapshotVolume() (corev1.Volume, corev1.VolumeMount) {
 		VolumeSource: corev1.VolumeSource{
 			NFS: &corev1.NFSVolumeSource{
 				Server:   nfsServer,
-				Path:     nfsSharePath + "/snapshots",
+				Path:     snapshotNFSPath,
 				ReadOnly: false,
 			},
 		},
