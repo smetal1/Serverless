@@ -33,6 +33,12 @@ func NewCRIU(log logr.Logger) *CRIU {
 	}
 }
 
+// Available returns true if the criu binary is found on PATH.
+func (c *CRIU) Available() bool {
+	_, err := exec.LookPath(c.binaryPath)
+	return err == nil
+}
+
 // Checkpoint captures the full process state (CPU registers, memory, open file
 // descriptors, etc.) for the container identified by containerID and writes
 // the checkpoint images to outputPath.

@@ -31,6 +31,12 @@ func NewCUDACheckpoint(log logr.Logger) *CUDACheckpoint {
 	}
 }
 
+// Available returns true if the cuda-checkpoint binary is found on PATH.
+func (c *CUDACheckpoint) Available() bool {
+	_, err := exec.LookPath(c.binaryPath)
+	return err == nil
+}
+
 // Lock locks the CUDA context for the given process so that GPU state can be
 // safely captured. This must be called before Checkpoint.
 //

@@ -83,31 +83,56 @@ async def wait_for_vllm_ready(timeout: float = 600.0) -> None:
     raise TimeoutError(f"vLLM did not become ready within {timeout}s")
 
 
-async def send_warmup_requests(count: int) -> None:
-    """Send warmup completion requests to vLLM to populate KV cache / CUDA kernels."""
-    logger.info("Sending %d warmup requests to %s (model=%s)", count, VLLM_COMPLETIONS_URL, VLLM_MODEL_ID)
-    async with httpx.AsyncClient() as client:
-        for i in range(count):
-            payload = {
-                "model": VLLM_MODEL_ID,
-                "prompt": "Hello, how are you?",
-                "max_tokens": 16,
-                "temperature": 0.0,
-            }
-            try:
-                resp = await client.post(
-                    VLLM_COMPLETIONS_URL, json=payload, timeout=60.0
-                )
-                if resp.status_code == 200:
-                    logger.info("Warmup request %d/%d succeeded", i + 1, count)
-                else:
-                    logger.warning(
-                        "Warmup request %d/%d returned %d: %s",
-                        i + 1, count, resp.status_code, resp.text[:200],
+async def send_warmup_requests(count: int, max_retries: int = 3) -> None:
+    """Send warmup completion requests to vLLM to populate KV cache / CUDA kernels.
+
+    If vLLM crashes during warmup (e.g. first inference triggers extra CUDA
+    memory allocation), we wait for it to recover and retry the full warmup.
+    """
+    for attempt in range(1, max_retries + 1):
+        logger.info(
+            "Warmup attempt %d/%d: sending %d requests to %s (model=%s)",
+            attempt, max_retries, count, VLLM_COMPLETIONS_URL, VLLM_MODEL_ID,
+        )
+        succeeded = 0
+        failed = False
+        async with httpx.AsyncClient() as client:
+            for i in range(count):
+                payload = {
+                    "model": VLLM_MODEL_ID,
+                    "prompt": "Hello, how are you?",
+                    "max_tokens": 16,
+                    "temperature": 0.0,
+                }
+                try:
+                    resp = await client.post(
+                        VLLM_COMPLETIONS_URL, json=payload, timeout=120.0
                     )
-            except Exception as e:
-                logger.warning("Warmup request %d/%d failed: %s", i + 1, count, e)
-    logger.info("Warmup complete")
+                    if resp.status_code == 200:
+                        succeeded += 1
+                        logger.info("Warmup request %d/%d succeeded", i + 1, count)
+                    else:
+                        logger.warning(
+                            "Warmup request %d/%d returned %d: %s",
+                            i + 1, count, resp.status_code, resp.text[:200],
+                        )
+                except Exception as e:
+                    logger.warning("Warmup request %d/%d failed: %s", i + 1, count, e)
+                    failed = True
+                    break
+
+        if succeeded == count:
+            logger.info("Warmup complete (%d/%d succeeded)", succeeded, count)
+            return
+
+        if failed and attempt < max_retries:
+            logger.info(
+                "vLLM appears to have crashed during warmup, waiting for recovery..."
+            )
+            await wait_for_vllm_ready(timeout=600.0)
+            logger.info("vLLM recovered, retrying warmup")
+
+    logger.info("Warmup finished (best effort, some requests may have failed)")
 
 
 async def annotate_pod(annotations: dict[str, str]) -> None:
