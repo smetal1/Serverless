@@ -62,7 +62,7 @@ func main() {
 
 	// Initialize shared components
 	modelCache := nfs.NewModelCache(nfsBasePath, log.WithName("nfs"))
-	snapshotMgr := snapshot.NewManager(mgr.GetClient(), snapshotBasePath, log.WithName("snapshot"))
+	snapshotMgr := snapshot.NewManager(mgr.GetClient(), mgr.GetConfig(), snapshotBasePath, log.WithName("snapshot"))
 
 	// Register controllers
 	if err := (&controller.ModelDeploymentReconciler{

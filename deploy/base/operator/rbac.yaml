@@ -86,6 +86,12 @@ rules:
       - get
       - list
       - watch
+  # Kubelet checkpoint API via API server proxy
+  - apiGroups: [""]
+    resources:
+      - nodes/proxy
+    verbs:
+      - create
   # Coordination for leader election
   - apiGroups: ["coordination.k8s.io"]
     resources:
