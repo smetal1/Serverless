@@ -124,6 +124,16 @@ func (r *SnapshotReconciler) handleCreating(ctx context.Context, logger logr.Log
 		}
 	}
 
+	// Re-fetch the Snapshot to pick up any status updates made by the
+	// SnapshotManager (e.g. placeholder snapshots marked Ready).
+	freshSnap := &v1.Snapshot{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(snap), freshSnap); err == nil {
+		if freshSnap.Status.Phase == v1.SnapshotPhaseReady {
+			logger.Info("snapshot status already Ready (set by SnapshotManager)")
+			return ctrl.Result{}, nil
+		}
+	}
+
 	// Snapshot data not yet available. The ModelDeployment controller is
 	// responsible for triggering the actual snapshot capture via the
 	// SnapshotManager. We just wait for the data to appear.

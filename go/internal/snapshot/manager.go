@@ -202,6 +202,10 @@ func (m *Manager) CreateSnapshot(ctx context.Context, pod *corev1.Pod, md *v1.Mo
 		if err := m.createOrUpdateSnapshotCR(ctx, snapshot); err != nil {
 			return nil, fmt.Errorf("failed to update Snapshot CR to Ready: %w", err)
 		}
+		// Status is a subresource — update it separately.
+		if err := m.updateSnapshotStatus(ctx, snapshot); err != nil {
+			return nil, fmt.Errorf("failed to update Snapshot status to Ready: %w", err)
+		}
 
 		m.log.Info("placeholder snapshot created",
 			"snapshotID", snapID,
