@@ -150,7 +150,7 @@ func VLLMPodTemplate(md *v1.ModelDeployment) *corev1.PodTemplateSpec {
 			InitialDelaySeconds: 10,
 			PeriodSeconds:       10,
 			TimeoutSeconds:      5,
-			FailureThreshold:    30,
+			FailureThreshold:    60, // 610s total: large models need 5+ min to load + compile
 		},
 	}
 

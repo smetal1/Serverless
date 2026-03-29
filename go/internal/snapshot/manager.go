@@ -581,13 +581,14 @@ func (m *Manager) runCRIUDump(ctx context.Context, pod *corev1.Pod, containerID,
 	)
 
 	// The script runs CRIU dump directly using nsenter to access the host's
-	// filesystem and process namespace. Key flags:
-	//   --leave-running: don't kill the process after dump
-	//   --shell-job: handle terminal-attached processes
-	//   --tcp-established: checkpoint TCP connections
-	//   --file-locks: checkpoint file locks
-	//   --ext-unix-sk: allow external UNIX sockets
-	//   --external: skip NVIDIA device files (can't be serialized)
+	// filesystem and process namespace.
+	//
+	// Key: nvidia-container-runtime injects bind mounts (NVIDIA libs, configs)
+	// into the container. CRIU must be told about the container root and these
+	// external mounts via --root and --external flags.
+	//
+	// The script auto-discovers external bind mounts from /proc/<pid>/mountinfo
+	// and passes them to CRIU so it doesn't try to serialize the backing store.
 	script := fmt.Sprintf(`set -e
 echo "Starting CRIU dump via nsenter..."
 nsenter --target 1 --mount -- bash -c '
@@ -603,20 +604,36 @@ nsenter --target 1 --mount -- bash -c '
   DUMP_DIR="%s"
   mkdir -p "$DUMP_DIR"
 
-  echo "Running: criu dump -t $HOST_PID -D $DUMP_DIR ..."
+  # Discover external bind mounts from mountinfo.
+  # These are nvidia-injected mounts that CRIU cannot serialize.
+  # Format: --external mnt[<mount_id>]:<mount_point>
+  EXT_MOUNTS=""
+  while IFS=" " read -r mnt_id parent_id major_minor root mount_point rest; do
+    # Skip the root mount (mount_id is typically 0 or the container root)
+    if [ "$mount_point" = "/" ]; then
+      continue
+    fi
+    EXT_MOUNTS="$EXT_MOUNTS --external mnt[$mnt_id]:$mount_point"
+  done < /proc/$HOST_PID/mountinfo
+  echo "Discovered external mounts for CRIU"
+
+  echo "Running: criu dump -t $HOST_PID -D $DUMP_DIR --root /proc/$HOST_PID/root ..."
   criu dump \
     -t $HOST_PID \
     -D "$DUMP_DIR" \
+    --root /proc/$HOST_PID/root \
+    --manage-cgroups \
     --leave-running \
     --shell-job \
     --tcp-established \
     --file-locks \
     --ext-unix-sk \
+    $EXT_MOUNTS \
     -v4 \
     --log-file dump.log \
     2>&1 || {
-      echo "CRIU dump failed. Dump log:"
-      cat "$DUMP_DIR/dump.log" 2>/dev/null || echo "(no dump log)"
+      echo "CRIU dump failed. Dump log (last 50 lines):"
+      tail -50 "$DUMP_DIR/dump.log" 2>/dev/null || echo "(no dump log)"
       exit 1
     }
 
